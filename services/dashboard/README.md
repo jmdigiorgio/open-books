@@ -1,44 +1,36 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Dashboard
 
-## Getting Started
+Next.js application that serves the OpenBooks dashboard. Handles bank linking (Plaid), transaction sync, and the tabbed UI.
 
-First, run the development server:
+## Setup
+
+See the [root README](../../README.md) for full setup instructions (Docker, env vars, etc.).
+
+Quick start from this directory:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env.local   # fill in your values
+npm install
+npm run dev                   # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Auth
 
-### Running locally
+Protected by a single shared password. Set `DASHBOARD_PASSWORD` in `.env.local`. If unset, password `dev` is accepted for local testing. Cookie-based session (30-day expiry).
 
-Copy `.env.example` to `.env.local` if you like. To test auth: with `DASHBOARD_PASSWORD` unset, use password **dev** to sign in. Set `DASHBOARD_PASSWORD` in `.env.local` to use your own password.
+## API Routes
 
-### Auth (single password)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/plaid/link-token` | Create a Plaid Link token for the frontend. |
+| POST | `/api/plaid/exchange` | Exchange Link public token for access token; store in file. |
+| GET | `/api/plaid/status` | Check if a bank is linked + institution name. |
+| POST | `/api/plaid/disconnect` | Clear stored access token. |
+| GET | `/api/plaid/sync` | Sync transactions from Plaid into Postgres. |
+| GET | `/api/transactions?year=YYYY` | Read transactions from Postgres (defaults to current year). |
+| POST | `/api/auth` | Login (password check). |
+| POST | `/api/auth/logout` | Logout (clear cookie). |
 
-The dashboard is protected by one shared password. Set `DASHBOARD_PASSWORD` in the environment (e.g. in Railway). For local dev with no env set, password **dev** is accepted so you can test the full login flow. Sign out via the header button; cookie lasts 30 days.
+## Environment Variables
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See [`.env.example`](.env.example) for the full list and descriptions.

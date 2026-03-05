@@ -1,67 +1,49 @@
-# OpenBooks – System Design
+# OpenBooks — System Design
 
 ## Problem
 
-- Manually enter **expenses**, **income**, and **mileage** into 3 tables for taxable income.
-- Goal: automate daily pull from business bank (and later mileage), auto-classify with AI, store, and expose in a UI.
+Solo business owners manually track expenses, income, and mileage across spreadsheets for tax filing. This is tedious and error-prone.
+
+**Goal**: Automate transaction tracking from a business bank account, classify transactions with AI, and expose everything in a simple dashboard.
 
 ---
 
-## Scope: Streamlined MVP
+## Scope
 
-**MVP = bank only.** No CSV, no mileage in v1. Keep the project small and shippable.
+### MVP (current)
 
-| In MVP | Later |
-|--------|--------|
-| Plaid → Novo business account | Mileage when we integrate an app with an API (MileIQ or TripLog) |
-| Transactions: fetch, store, dedupe | CSV/import flows only if we add them later |
-| AI classification (expense/income + tax category) | Reports, export, few-shot from overrides |
-| Minimal UI: list transactions, override category | |
-
----
-
-## Confirmed Decisions
-
-| Decision | Choice |
-|----------|--------|
-| Bank | **Plaid** (Novo business account). |
-| Deployment | **Railway** (app + Postgres). |
-| Classification | **AI from day one** (LLM per transaction; overrides stored). |
-| Mileage | **Out of MVP.** Add when we use MileIQ or TripLog API. |
-| Dashboard auth | **Single password** (no user accounts). Password in env (`DASHBOARD_PASSWORD`); cookie-based session after login. |
+| Included | Deferred |
+|----------|----------|
+| Plaid Link to Novo business account | Mileage (MileIQ / TripLog integration) |
+| Transaction sync (cursor-based, incremental) | AI classification (expense/income + tax category) |
+| Local Postgres storage | Reports and export |
+| Dashboard: view transactions by year | CSV import flows |
+| Single-password auth | Multi-user accounts |
 
 ---
 
-## High-Level Architecture (MVP)
+## Architecture
 
 ```
 ┌─────────────────┐
-│  Plaid (Novo)   │
+│  Plaid API       │  (Novo via /transactions/sync)
 └────────┬────────┘
          │
          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  DAILY JOB (Railway)                                              │
-│  Fetch new transactions → dedupe by plaid_id → store              │
-└─────────────────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  AI CLASSIFICATION                                                │
-│  LLM: merchant, amount, date → expense/income + tax category      │
-└─────────────────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Postgres (Railway)                                               │
-│  accounts  •  transactions (with ai_category)  •  overrides       │
-└─────────────────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  UI (dashboard)                                                   │
-│  List transactions  •  Filter  •  Override category               │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  Next.js API Routes                                     │
+│  /api/plaid/sync — cursor-based sync (Plaid → Postgres) │
+│  /api/plaid/link-token, exchange, status, disconnect     │
+│  /api/transactions — read from Postgres (year filter)    │
+└────────┬────────────────────────────────────┬───────────┘
+         │                                    │
+         ▼                                    ▼
+┌─────────────────┐              ┌────────────────────────┐
+│  Postgres        │              │  Dashboard UI           │
+│  transactions    │              │  Tabs: Summary, Income, │
+│  sync_state      │              │  Expenses, Mileage,     │
+└─────────────────┘              │  Transactions            │
+                                 └────────────────────────┘
 ```
 
 ---
@@ -70,43 +52,83 @@
 
 | Layer | Choice |
 |-------|--------|
-| Backend | Python (FastAPI) – Plaid, LLM calls. |
-| DB | Postgres (Railway). |
-| Scheduler | Railway cron or worker – daily sync. |
-| AI | OpenAI API (configurable). |
-| Frontend | Next.js (existing `services/dashboard`). |
-| Secrets | Railway env vars. Dashboard: `DASHBOARD_PASSWORD` (single shared password; no username). |
+| Frontend + API | Next.js 16 (App Router, server components + API routes) |
+| Database | Postgres 16 (Docker Compose locally; Railway for production) |
+| Bank integration | Plaid SDK (`plaid` npm package, `/transactions/sync`) |
+| Auth | Single shared password; HMAC cookie session (`DASHBOARD_PASSWORD`) |
+| Token storage | Postgres (`plaid_link_state` table); single linked account |
 
 ---
 
-## Data Model (MVP)
+## Decisions
 
-- **accounts** – Plaid-linked accounts (e.g. Novo business checking).
-- **transactions** – date, amount, merchant, plaid_category, **ai_category** (expense/income + tax category), account_id, plaid_id (dedupe).
-- **classification_overrides** – (transaction_id, user_category) for overrides; optional few-shot later.
-
-*(Mileage table and sources come in a later phase.)*
-
----
-
-## Phased Plan
-
-1. **MVP**
-   - Plaid link + fetch transactions; store in Postgres; daily job.
-   - AI: classify each new transaction (expense/income + tax category); store overrides.
-   - UI: list transactions, filter, edit category.
-   - Deploy to Railway.
-
-2. **Later (only after MVP is solid)**
-   - Mileage via MileIQ or TripLog API (no CSV in scope).
-   - Reports / export; use overrides as few-shot; anything else.
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Bank provider | Plaid | Industry standard; supports Novo and most US banks. |
+| Sync method | `/transactions/sync` (cursor-based) | Cost-efficient: first call gets all history, subsequent calls get only deltas. |
+| Token storage | Postgres (`plaid_link_state` table) | Survives deploys and restarts; no ephemeral filesystem dependency. |
+| Auth | Single password | No user accounts needed for a personal bookkeeping tool. |
+| Deployment target | Railway | App + Postgres + env vars in one platform. |
+| AI classification | Deferred to post-MVP | Get transaction flow working first; add AI layer on top. |
+| Mileage | Deferred to post-MVP | Needs MileIQ or TripLog API integration. |
 
 ---
 
-## Next Steps
+## Data Model
 
-1. Backend in `services/` (e.g. `services/api`): FastAPI, Plaid, Postgres, env template.
-2. Plaid link flow + transactions sync + daily job.
-3. AI classification for transactions.
-4. Dashboard: single view of transactions + override; call backend API.
-5. Railway: app + Postgres + cron.
+### `transactions`
+
+Mirrors [Plaid's Transaction object](https://plaid.com/docs/api/products/transactions/#transactionssync). Primary key: `transaction_id` (Plaid's unique ID).
+
+Key columns: `date`, `amount`, `merchant_name`, `name`, `pending`, `personal_finance_category`, `payment_channel`, `iso_currency_code`.
+
+Full schema: [`db/01-init.sql`](../db/01-init.sql).
+
+### `sync_state`
+
+Single-row table (id locked to 1). Stores the Plaid sync `cursor` and `last_synced_at` timestamp. Used by `/api/plaid/sync` to resume incremental syncs.
+
+### `plaid_link_state`
+
+Single-row table (id locked to 1). Stores the Plaid `access_token`, `item_id`, and `institution_name` for the linked bank account.
+
+---
+
+## Sync Flow
+
+1. **Trigger**: Page load (auto-sync when bank is linked) or manual Sync button.
+2. **Read cursor**: Load the saved cursor from `sync_state` (empty on first run).
+3. **Paginate**: Call Plaid `/transactions/sync` in a loop until `has_more` is false, collecting `added`, `modified`, and `removed` transactions.
+4. **Upsert**: Insert or update all `added`/`modified` transactions in Postgres (`ON CONFLICT DO UPDATE`).
+5. **Delete**: Remove any `removed` transaction IDs from Postgres.
+6. **Save cursor**: Persist the new cursor and timestamp in `sync_state`.
+
+No year filtering at sync time — all transactions are stored. The UI filters by year at query time.
+
+---
+
+## Dashboard
+
+### Tab Structure
+
+| Order | Tab | Purpose |
+|-------|-----|---------|
+| 1 | **Summary** | At-a-glance totals: income, expenses, net. (Placeholder.) |
+| 2 | **Income** | Income transactions. (Placeholder.) |
+| 3 | **Expenses** | Expense transactions, filters, categories. (Placeholder.) |
+| 4 | **Mileage** | Mileage tracking and logs. (Post-MVP.) |
+| 5 | **Transactions** | All synced transactions. Year filter, sync button, last-synced timestamp. |
+
+### Header
+
+- **OpenBooks** title (left).
+- Status indicator (green dot = linked, gray = not linked) + institution name + **Link account** button + **Sign out** (right).
+
+---
+
+## Roadmap
+
+1. **AI classification** — LLM-based categorization of transactions (expense/income + tax category). Override UI for corrections.
+2. **Mileage** — MileIQ or TripLog API integration. Mileage tab becomes functional.
+3. **Reports & export** — Summaries by category, CSV/PDF export for tax filing.
+4. **Deploy** — Railway: Next.js app + Postgres + env vars.

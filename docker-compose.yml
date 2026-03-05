@@ -1,0 +1,24 @@
+# OpenBooks compose stack: Postgres + schema (transactions table).
+# Run: docker compose up -d
+# Stop: docker compose down
+
+name: open-books
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: open-books-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: openbooks
+      POSTGRES_PASSWORD: openbooks
+      POSTGRES_DB: openbooks
+    ports:
+      - "5432:5432"
+    volumes:
+      - openbooks_pgdata:/var/lib/postgresql/data
+      # Init script runs on first start (empty data dir); creates transactions table
+      - ./db:/docker-entrypoint-initdb.d
+
+volumes:
+  openbooks_pgdata:
