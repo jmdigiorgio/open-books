@@ -371,6 +371,7 @@ export default function DashboardPage() {
                 <table className="w-full text-left text-sm">
                   <thead className="border-b border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900">
                     <tr>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Transaction ID</th>
                       <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Date</th>
                       <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Description</th>
                       <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Category</th>
@@ -384,6 +385,9 @@ export default function DashboardPage() {
                         key={txn.transaction_id}
                         className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50"
                       >
+                        <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-zinc-500 dark:text-zinc-400" title={txn.transaction_id}>
+                          {txn.transaction_id}
+                        </td>
                         <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
                           {txn.date}
                         </td>
