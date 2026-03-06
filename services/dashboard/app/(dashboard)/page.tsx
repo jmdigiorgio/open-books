@@ -383,8 +383,12 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-zinc-950">
       <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
-        <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-          OpenBooks
+        <h1 className="flex items-center">
+          <img
+            src="/logo.svg"
+            alt="OpenBooks"
+            className="h-8 w-auto brightness-0 invert"
+          />
         </h1>
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-4">

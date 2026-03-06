@@ -39,8 +39,12 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-100 dark:bg-zinc-900">
       <main className="w-full max-w-sm rounded-lg border border-zinc-200 bg-white p-6 shadow dark:border-zinc-700 dark:bg-zinc-800">
-        <h1 className="mb-4 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-          OpenBooks
+        <h1 className="mb-4 flex justify-center">
+          <img
+            src="/logo.svg"
+            alt="OpenBooks"
+            className="h-8 w-auto brightness-0 invert"
+          />
         </h1>
         <p className="mb-6 text-sm text-zinc-500 dark:text-zinc-400">
           Enter the dashboard password.
