@@ -419,31 +419,16 @@ export default function DashboardPage() {
     if (tab === "prompt") fetchPrompt();
   }, [tab, fetchPrompt]);
 
-  /* Auto-expand prompt textarea to show full content. Preserve scroll position so typing doesn't jump page to top. */
+  /* Auto-expand prompt textarea after user stops typing (debounced) to avoid blink and scroll jump. */
   useEffect(() => {
     if (tab !== "prompt" || promptLoading) return;
-    let savedScrollY = 0;
-    let savedTextareaScrollTop = 0;
-    const run = () => {
+    const t = setTimeout(() => {
       const el = promptTextareaRef.current;
       if (!el) return;
-      savedScrollY = window.scrollY;
-      savedTextareaScrollTop = el.scrollTop;
       el.style.height = "auto";
       el.style.height = `${Math.max(el.scrollHeight, 120)}px`;
-    };
-    const restore = () => {
-      window.scrollTo({ top: savedScrollY, behavior: "auto" });
-      const el = promptTextareaRef.current;
-      if (el) el.scrollTop = savedTextareaScrollTop;
-    };
-    const id1 = requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        run();
-        requestAnimationFrame(restore);
-      });
-    });
-    return () => cancelAnimationFrame(id1);
+    }, 200);
+    return () => clearTimeout(t);
   }, [promptContent, tab, promptLoading]);
 
   const handlePromptSave = useCallback(async () => {
