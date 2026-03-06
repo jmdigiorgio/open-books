@@ -46,3 +46,12 @@ CREATE TABLE plaid_link_state (
 );
 
 COMMENT ON TABLE plaid_link_state IS 'Plaid access token and linked institution; single row for one bank account.';
+
+-- Single-row table holding the markdown rules document the classification agent reads.
+CREATE TABLE agent_rules (
+  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  content text NOT NULL DEFAULT '',
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE agent_rules IS 'Markdown rules for the agent when classifying transactions as income vs expenses.';
