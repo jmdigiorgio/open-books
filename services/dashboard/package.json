@@ -9,7 +9,6 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@uiw/react-md-editor": "^4.0.11",
     "csv-parse": "^6.1.0",
     "next": "16.1.6",
     "pg": "^8.20.0",

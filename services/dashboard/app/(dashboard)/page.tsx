@@ -1,17 +1,18 @@
 "use client";
 
-import "@uiw/react-md-editor/markdown-editor.css";
-import dynamic from "next/dynamic";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { usePlaidLink } from "react-plaid-link";
 
-/** Rich markdown editor; loaded only on client to avoid SSR issues. */
-const MDEditor = dynamic(
-  () => import("@uiw/react-md-editor").then((mod) => mod.default),
-  { ssr: false }
-);
+type TabId = "summary" | "deductions" | "income" | "mileage" | "transactions" | "rules" | "prompt";
 
-type TabId = "summary" | "expenses" | "income" | "mileage" | "transactions" | "rules";
+/** One rule row from GET /api/rules. */
+interface RuleRow {
+  id: number;
+  content: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
 /** Shape of a transaction row returned by GET /api/transactions. */
 interface Transaction {
@@ -48,10 +49,11 @@ interface TransactionsResponse {
 const TABS: { id: TabId; label: string }[] = [
   { id: "summary", label: "Summary" },
   { id: "income", label: "Income" },
-  { id: "expenses", label: "Expenses" },
+  { id: "deductions", label: "Deductions" },
   { id: "mileage", label: "Mileage" },
   { id: "transactions", label: "Transactions" },
   { id: "rules", label: "Rules" },
+  { id: "prompt", label: "Prompt" },
 ];
 
 export default function DashboardPage() {
@@ -273,14 +275,18 @@ export default function DashboardPage() {
     [fetchMileage]
   );
 
-  /* ---- Rules (agent classification) ---- */
-  const [rulesContent, setRulesContent] = useState("");
+  /* ---- Rules (agent classification): one row per rule, CRUD ---- */
+  const [rules, setRules] = useState<RuleRow[]>([]);
   const [rulesLoading, setRulesLoading] = useState(false);
-  const [rulesSaving, setRulesSaving] = useState(false);
   const [rulesError, setRulesError] = useState<string | null>(null);
-  const [rulesUpdatedAt, setRulesUpdatedAt] = useState<string | null>(null);
-  /** When true, show preview only (content is saved). When false, show editor. */
-  const [rulesLocked, setRulesLocked] = useState(false);
+  /** Id of rule being edited inline; null when not editing. */
+  const [rulesEditingId, setRulesEditingId] = useState<number | null>(null);
+  /** Draft content while editing (for the row in rulesEditingId). */
+  const [rulesEditDraft, setRulesEditDraft] = useState("");
+  /** Id of rule pending delete (for confirm); null when not confirming. */
+  const [rulesDeletingId, setRulesDeletingId] = useState<number | null>(null);
+  /** New-rule form: current input. */
+  const [rulesNewContent, setRulesNewContent] = useState("");
 
   const fetchRules = useCallback(async () => {
     setRulesLoading(true);
@@ -289,8 +295,7 @@ export default function DashboardPage() {
       const res = await fetch("/api/rules");
       if (!res.ok) throw new Error("Failed to load rules");
       const data = await res.json();
-      setRulesContent(data.content ?? "");
-      setRulesUpdatedAt(data.updatedAt ?? null);
+      setRules(Array.isArray(data.rules) ? data.rules : []);
     } catch {
       setRulesError("Could not load rules");
     } finally {
@@ -302,25 +307,154 @@ export default function DashboardPage() {
     if (tab === "rules") fetchRules();
   }, [tab, fetchRules]);
 
-  const handleRulesSave = useCallback(async () => {
-    setRulesSaving(true);
+  const handleAddRule = useCallback(async () => {
+    const content = rulesNewContent.trim();
+    if (!content) return;
     setRulesError(null);
     try {
       const res = await fetch("/api/rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? "Failed to add rule");
+      }
+      const rule = await res.json();
+      setRules((prev) => [...prev, rule]);
+      setRulesNewContent("");
+    } catch (e) {
+      setRulesError(e instanceof Error ? e.message : "Failed to add rule");
+    }
+  }, [rulesNewContent]);
+
+  const startEditRule = useCallback((row: RuleRow) => {
+    setRulesEditingId(row.id);
+    setRulesEditDraft(row.content);
+  }, []);
+
+  const cancelEditRule = useCallback(() => {
+    setRulesEditingId(null);
+    setRulesEditDraft("");
+  }, []);
+
+  const saveEditRule = useCallback(async () => {
+    if (rulesEditingId === null) return;
+    setRulesError(null);
+    try {
+      const res = await fetch(`/api/rules/${rulesEditingId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: rulesEditDraft }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? "Failed to save rule");
+      }
+      const data = await res.json();
+      setRules((prev) =>
+        prev.map((r) =>
+          r.id === rulesEditingId
+            ? { ...r, content: rulesEditDraft, updatedAt: data.updatedAt }
+            : r
+        )
+      );
+      setRulesEditingId(null);
+      setRulesEditDraft("");
+    } catch (e) {
+      setRulesError(e instanceof Error ? e.message : "Failed to save rule");
+    }
+  }, [rulesEditingId, rulesEditDraft]);
+
+  const confirmDeleteRule = useCallback((id: number) => {
+    setRulesDeletingId(id);
+  }, []);
+
+  const cancelDeleteRule = useCallback(() => {
+    setRulesDeletingId(null);
+  }, []);
+
+  const handleDeleteRule = useCallback(async () => {
+    if (rulesDeletingId === null) return;
+    setRulesError(null);
+    try {
+      const res = await fetch(`/api/rules/${rulesDeletingId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? "Failed to delete rule");
+      }
+      setRules((prev) => prev.filter((r) => r.id !== rulesDeletingId));
+      setRulesDeletingId(null);
+    } catch (e) {
+      setRulesError(e instanceof Error ? e.message : "Failed to delete rule");
+    }
+  }, [rulesDeletingId]);
+
+  /* ---- Prompt (single-row agent prompt) ---- */
+  const [promptContent, setPromptContent] = useState("");
+  const [promptLoading, setPromptLoading] = useState(false);
+  const [promptSaving, setPromptSaving] = useState(false);
+  const [promptError, setPromptError] = useState<string | null>(null);
+  const [promptUpdatedAt, setPromptUpdatedAt] = useState<string | null>(null);
+  const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const fetchPrompt = useCallback(async () => {
+    setPromptLoading(true);
+    setPromptError(null);
+    try {
+      const res = await fetch("/api/prompt");
+      if (!res.ok) throw new Error("Failed to load prompt");
+      const data = await res.json();
+      setPromptContent(data.content ?? "");
+      setPromptUpdatedAt(data.updatedAt ?? null);
+    } catch {
+      setPromptError("Could not load prompt");
+    } finally {
+      setPromptLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "prompt") fetchPrompt();
+  }, [tab, fetchPrompt]);
+
+  /* Auto-expand prompt textarea to show full content. Defer so layout is done (e.g. after switching tab and content load). */
+  useEffect(() => {
+    if (tab !== "prompt" || promptLoading) return;
+    const run = () => {
+      const el = promptTextareaRef.current;
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = `${Math.max(el.scrollHeight, 120)}px`;
+    };
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(run);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [promptContent, tab, promptLoading]);
+
+  const handlePromptSave = useCallback(async () => {
+    setPromptSaving(true);
+    setPromptError(null);
+    try {
+      const res = await fetch("/api/prompt", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: rulesContent }),
+        body: JSON.stringify({ content: promptContent }),
       });
-      if (!res.ok) throw new Error("Failed to save rules");
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? "Failed to save prompt");
+      }
       const data = await res.json();
-      setRulesUpdatedAt(data.updatedAt ?? null);
-      setRulesLocked(true);
+      setPromptUpdatedAt(data.updatedAt ?? null);
     } catch (e) {
-      setRulesError(e instanceof Error ? e.message : "Failed to save rules");
+      setPromptError(e instanceof Error ? e.message : "Failed to save prompt");
     } finally {
-      setRulesSaving(false);
+      setPromptSaving(false);
     }
-  }, [rulesContent]);
+  }, [promptContent]);
 
   /**
    * From mileage table: total miles and mileage deduction for the selected year only.
@@ -506,12 +640,12 @@ export default function DashboardPage() {
               </div>
               <div>
                 <p className="mb-2 text-sm font-medium text-zinc-500 dark:text-zinc-400">
-                  Expenses &amp; Deductions
+                  Income &amp; Deductions
                 </p>
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
                     <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                      Business expenses
+                      Business deductions
                     </p>
                     <p className="mt-1 text-2xl font-semibold text-red-600 dark:text-red-400">
                       $28,190
@@ -561,13 +695,13 @@ export default function DashboardPage() {
             </div>
           </section>
         )}
-        {tab === "expenses" && (
-          <section aria-label="Expenses">
+        {tab === "deductions" && (
+          <section aria-label="Deductions">
             <h2 className="mb-4 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-              Expenses
+              Deductions
             </h2>
             <p className="mb-4 text-zinc-600 dark:text-zinc-400">
-              Example of an IRS-compliant expense record. The IRS expects: who was paid (payee),
+              Example of an IRS-compliant deduction record. The IRS expects: who was paid (payee),
               amount, proof of payment, date incurred, and a description of what was purchased or
               the service received.
             </p>
@@ -910,47 +1044,192 @@ export default function DashboardPage() {
               Rules
             </h2>
             <p className="mb-4 text-zinc-600 dark:text-zinc-400">
-              Markdown rules the agent will read when classifying transactions as income vs expenses. Unlock to edit, Lock to save and show preview.
+              Rules help the agent classify transactions as income or deduction. Add rules when the automatic classification is wrong—for example, a refund showing as income, a transfer as a deduction, or a specific merchant you always want treated one way. Clearer rules give you more accurate Summary, Income, and Deductions views.
             </p>
-            <div className="mb-4 flex flex-wrap items-center gap-3">
-              {rulesUpdatedAt && (
-                <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Last saved {new Date(rulesUpdatedAt).toLocaleString()}
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={() =>
-                  rulesLocked ? setRulesLocked(false) : handleRulesSave()
-                }
-                disabled={rulesSaving}
-                className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
-                title={rulesLocked ? "Unlock to edit" : "Lock to save and show preview"}
-              >
-                {rulesSaving ? "Saving…" : rulesLocked ? "Unlock" : "Lock"}
-              </button>
-            </div>
             {rulesError && (
               <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
                 {rulesError}
               </div>
             )}
+            {/* New rule: textarea + Add button. */}
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start">
+              <textarea
+                value={rulesNewContent}
+                onChange={(e) => setRulesNewContent(e.target.value)}
+                placeholder="e.g. Treat merchant &quot;Acme Corp&quot; as income."
+                rows={2}
+                className="min-w-0 flex-1 rounded border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-500"
+              />
+              <button
+                type="button"
+                onClick={handleAddRule}
+                disabled={!rulesNewContent.trim()}
+                className="shrink-0 rounded bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              >
+                Add rule
+              </button>
+            </div>
             {rulesLoading ? (
               <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
             ) : (
-              <div className="mb-4" data-color-mode="dark">
-                <MDEditor
-                  value={rulesContent}
-                  onChange={(v) => setRulesContent(v ?? "")}
-                  height={320}
-                  preview={rulesLocked ? "preview" : "edit"}
-                  visibleDragbar={false}
-                  textareaProps={{
-                    placeholder:
-                      "# Classification rules\n\nUse this space to define how the agent should treat certain merchants, categories, or patterns as income or expense.",
-                    readOnly: rulesLocked,
-                  }}
-                />
+              <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
+                <table className="w-full min-w-[400px] border-collapse text-left text-sm">
+                  <thead className="border-b border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900">
+                    <tr>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">
+                        Rule
+                      </th>
+                      <th className="w-0 px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                    {rules.length === 0 ? (
+                      <tr>
+                        <td colSpan={2} className="px-3 py-4 text-zinc-500 dark:text-zinc-400">
+                          No rules yet. Add one above.
+                        </td>
+                      </tr>
+                    ) : (
+                      rules.map((row) => (
+                        <tr key={row.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
+                          <td className="px-3 py-2">
+                            {rulesEditingId === row.id ? (
+                              <div className="flex flex-col gap-2">
+                                <textarea
+                                  value={rulesEditDraft}
+                                  onChange={(e) => setRulesEditDraft(e.target.value)}
+                                  rows={3}
+                                  className="min-w-0 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                                  autoFocus
+                                />
+                                <div className="flex gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={saveEditRule}
+                                    className="rounded bg-zinc-900 px-2 py-1 text-xs font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={cancelEditRule}
+                                    className="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap">
+                                {row.content || "—"}
+                              </span>
+                            )}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2">
+                            {rulesEditingId === row.id ? null : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => startEditRule(row)}
+                                  className="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                                >
+                                  Edit
+                                </button>
+                                {rulesDeletingId === row.id ? (
+                                  <span className="ml-2 inline-flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={handleDeleteRule}
+                                      className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+                                    >
+                                      Confirm delete
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={cancelDeleteRule}
+                                      className="rounded border border-zinc-300 px-2 py-1 text-xs text-zinc-600 dark:border-zinc-500 dark:text-zinc-400"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => confirmDeleteRule(row.id)}
+                                    className="ml-2 rounded border border-red-300 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-950/30"
+                                  >
+                                    Delete
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )}
+        {tab === "prompt" && (
+          <section aria-label="Prompt">
+            <h2 className="mb-4 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+              Prompt
+            </h2>
+            <p className="mb-4 text-zinc-600 dark:text-zinc-400">
+              System prompt for the classification agent. This is the main instruction text the agent sees (e.g. how to treat income vs deductions). Edit below and save.
+            </p>
+            {promptError && (
+              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                {promptError}
+              </div>
+            )}
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              {promptUpdatedAt && (
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Last saved {new Date(promptUpdatedAt).toLocaleString()}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={handlePromptSave}
+                disabled={promptSaving}
+                className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              >
+                {promptSaving ? "Saving…" : "Save"}
+              </button>
+            </div>
+            {promptLoading ? (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
+            ) : (
+              <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
+                <table className="w-full min-w-[400px] border-collapse text-left text-sm">
+                  <thead className="border-b border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900">
+                    <tr>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">
+                        Prompt
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                    <tr className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
+                      <td className="px-3 py-2">
+                        <textarea
+                          ref={promptTextareaRef}
+                          value={promptContent}
+                          onChange={(e) => setPromptContent(e.target.value)}
+                          placeholder="e.g. You are a classifier. Treat refunds as deductions, salary as income…"
+                          rows={4}
+                          className="min-h-[120px] min-w-0 w-full resize-none overflow-hidden rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                        />
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             )}
           </section>

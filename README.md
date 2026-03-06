@@ -1,16 +1,16 @@
 # OpenBooks
 
-Open-source bookkeeping for solo businesses. Connect your bank via Plaid, sync transactions into a local Postgres database, and view everything in a clean dashboard.
+Open-source bookkeeping for solo businesses and freelancers. Connect your bank via Plaid, sync transactions to Postgres, and manage income, deductions, mileage, and classification rules in a single dashboard.
 
-Built for freelancers and sole proprietors who want to track income, expenses, and mileage without paying for QuickBooks.
+Built for freelancers and sole proprietors who want to track income, deductions, and mileage without paying for QuickBooks.
 
 ## Features
 
-- **Bank sync via Plaid** — Link your business bank account (e.g. Novo) through Plaid Link. First sync pulls all available history (up to 24 months); subsequent syncs fetch only new and modified transactions.
-- **Local Postgres storage** — Transactions are stored locally in a Postgres database. The dashboard reads from the DB, not from Plaid, so page loads are fast and don't cost API calls.
-- **Tabbed dashboard** — Summary, Income, Expenses, Mileage, and Transactions tabs. The Transactions tab displays a sortable table with year filtering and a manual Sync button.
+- **Bank sync via Plaid** — Link your business bank account (e.g. Novo) through Plaid Link. First sync pulls available history (up to 24 months); subsequent syncs are incremental. Sync can be triggered manually or by a cron job.
+- **Postgres storage** — Transactions, income, deductions, rules, and prompt are stored in Postgres. The dashboard reads from the DB for fast loads and no repeated Plaid API cost.
+- **Tabbed dashboard** — Summary, Income, Deductions, Mileage, Transactions, Rules, and Prompt. Transactions tab: sortable table, year filter, Sync button. Rules: per-rule CRUD for classification overrides. Prompt: system prompt for the classification agent.
+- **Income & deductions tables** — Schema aligned with IRS-style records (date, payer/payee, description, amount, proof). Ready for an agent or manual entry to classify transactions from the `transactions` table.
 - **Single-password auth** — No user accounts. One shared password protects the dashboard (cookie-based session).
-- **Auto-sync on load** — When a bank is linked, the dashboard automatically syncs on page load to keep data fresh.
 
 ## Architecture
 
@@ -21,26 +21,39 @@ Plaid API ──► Next.js API routes ──► Postgres
               Dashboard UI
 ```
 
-- **Frontend + API**: Next.js (App Router) in `services/dashboard/`.
-- **Database**: Postgres 16 via Docker Compose.
-- **Bank integration**: Plaid SDK (`plaid` npm package). Access token stored in the `plaid_link_state` table.
-- **Sync**: Cursor-based via Plaid `/transactions/sync`. Cursor persisted in a `sync_state` table so incremental syncs are efficient.
+- **Frontend + API**: Next.js 16 (App Router) in `services/dashboard/`.
+- **Database**: Postgres 16 (Docker Compose locally; Railway or any Postgres in production).
+- **Bank integration**: Plaid SDK (`plaid` npm package). Access token stored in `plaid_link_state`.
+- **Sync**: Cursor-based via Plaid `/transactions/sync`; cursor in `sync_state`.
 
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) 18+
-- [Docker](https://www.docker.com/) (for Postgres)
-- A [Plaid](https://dashboard.plaid.com/) account with API keys
+- [Docker](https://www.docker.com/) (optional; for local Postgres)
+- [Plaid](https://dashboard.plaid.com/) account and API keys (for bank linking)
 
 ## Quick Start
 
-### 1. Start the database
+### 1. Database
+
+**Option A — Local (Docker)**
 
 ```bash
 docker compose up -d
 ```
 
-This starts Postgres 16 on `localhost:5432` and runs `db/01-init.sql` to create the `transactions`, `sync_state`, and `plaid_link_state` tables.
+Postgres 16 runs on `localhost:5432`. On first start, `db/01-init.sql` creates the schema (transactions, sync_state, plaid_link_state, agent_rules, agent_prompt, income, deductions).
+
+**Option B — Existing Postgres (e.g. Railway)**
+
+Use your `DATABASE_URL`. For existing DBs that don’t run `01-init.sql`, use the one-time script to ensure `income` and `deductions` exist:
+
+```bash
+cd services/dashboard
+node scripts/ensure-income-deductions.js
+```
+
+Script reads `DATABASE_URL` from `.env.local`; creates `income` and `deductions` if missing; migrates from legacy `expenses` table if present.
 
 ### 2. Configure environment
 
@@ -56,8 +69,8 @@ Edit `.env.local`:
 | `DASHBOARD_PASSWORD` | No | Dashboard login password. Defaults to `dev` if unset. |
 | `PLAID_CLIENT_ID` | Yes | From [dashboard.plaid.com](https://dashboard.plaid.com/) → Keys. |
 | `PLAID_SECRET` | Yes | Sandbox, Development, or Production secret. |
-| `PLAID_ENV` | No | `sandbox` (default), `development` (real bank), or `production`. |
-| `DATABASE_URL` | Yes | Postgres connection string. Default: `postgresql://openbooks:openbooks@localhost:5432/openbooks`. |
+| `PLAID_ENV` | No | `sandbox` (default), `development`, or `production`. |
+| `DATABASE_URL` | Yes | Postgres connection string. Local default: `postgresql://openbooks:openbooks@localhost:5432/openbooks`. |
 
 ### 3. Install and run
 
@@ -66,54 +79,67 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Sign in, link your bank account via the header button, and navigate to the Transactions tab.
+Open [http://localhost:3000](http://localhost:3000). Sign in, link your bank via the header, then use the Transactions tab to sync and view data.
 
 ## Project Structure
 
 ```
 open-books/
-├── docker-compose.yml          # Postgres service
+├── docker-compose.yml          # Postgres (optional)
 ├── db/
-│   └── 01-init.sql             # Schema: transactions + sync_state tables
+│   └── 01-init.sql            # Full schema (transactions, sync_state, plaid_link_state,
+│                              # agent_rules, agent_prompt, income, deductions)
+├── docs/
+│   └── SYSTEM_DESIGN.md       # Architecture and data model
 └── services/
-    └── dashboard/              # Next.js app
+    └── dashboard/             # Next.js app
         ├── app/
-        │   ├── (dashboard)/    # Main dashboard (tabs, transaction table)
-        │   ├── login/          # Login page
+        │   ├── (dashboard)/   # Main dashboard (tabs, tables)
+        │   ├── login/
         │   └── api/
-        │       ├── auth/       # Login/logout endpoints
-        │       ├── plaid/      # link-token, exchange, status, sync, disconnect
-        │       └── transactions/ # Read transactions from DB (year filter)
-        └── lib/
-            ├── auth.ts         # Auth constants
-            ├── db.ts           # Postgres pool
-            ├── plaid.ts        # Plaid client, link token, exchange
-            ├── plaid-token.ts  # Access token storage (Postgres)
-            └── sync.ts         # Transaction sync (Plaid → Postgres)
+        │       ├── auth/           # Login / logout
+        │       ├── plaid/          # link-token, exchange, status, sync, disconnect
+        │       ├── transactions/   # Read transactions (year filter)
+        │       ├── income/         # List income rows
+        │       ├── deductions/     # List deduction rows
+        │       ├── rules/          # CRUD for agent_rules
+        │       ├── rules/[id]      # PATCH/DELETE single rule
+        │       ├── prompt/         # GET/PUT agent_prompt
+        │       └── mileage/        # GET mileage table; upload CSV
+        ├── lib/                # db, plaid, sync, auth, rules, prompt, income, deductions, mileage
+        └── scripts/
+            └── ensure-income-deductions.js   # One-time: create income + deductions tables
 ```
 
-## How Sync Works
+## Database Schema (summary)
 
-1. **First sync** — No cursor exists. Plaid returns all available transaction history. Everything is inserted into the `transactions` table.
-2. **Subsequent syncs** — The saved cursor is sent to Plaid. Only new, modified, and removed transactions are returned. The DB is updated accordingly (upsert/delete).
-3. **No polling** — Sync runs on page load (auto) or when you click the Sync button. No background jobs or cron.
-
-## Database Schema
-
-**`transactions`** — Mirrors Plaid's [Transaction object](https://plaid.com/docs/api/products/transactions/#transactionssync). Primary key: `transaction_id`.
-
-**`sync_state`** — Single-row table storing the Plaid sync cursor and last sync timestamp.
-
-**`plaid_link_state`** — Single-row table storing the Plaid access token, item ID, and institution name for the linked bank account.
+| Table | Purpose |
+|-------|---------|
+| `transactions` | Plaid transaction sync; mirrors Plaid Transaction object. |
+| `sync_state` | Single row: Plaid sync cursor and last_synced_at. |
+| `plaid_link_state` | Single row: Plaid access token, item ID, institution name. |
+| `agent_rules` | One row per classification rule (CRUD); agent reads these. |
+| `agent_prompt` | Single row: system prompt for the classification agent. |
+| `income` | Classified income rows (date, name, description, amount, proof → transaction_id). |
+| `deductions` | Classified deduction rows (same shape). |
 
 See [`db/01-init.sql`](db/01-init.sql) for the full schema.
 
-## Roadmap
+## Classification agent (prepared, not wired)
 
-- [ ] AI classification (expense/income + tax category per transaction)
-- [ ] Mileage tracking (MileIQ or TripLog integration)
-- [ ] Reports and export
-- [ ] Deploy to Railway
+The app is set up for an external agent (or cron job) that:
+
+1. Reads the system prompt from `agent_prompt` and rules from `agent_rules`.
+2. Considers only transactions whose `transaction_id` is not already in `income.proof` or `deductions.proof`.
+3. For each unexamined transaction, classifies as income or deduction and inserts one row into `income` or `deductions` with `proof` = that transaction’s `transaction_id`, copying amount, date, name (and optionally description).
+
+Transaction sync from Plaid can be done separately (e.g. cron calling `/api/plaid/sync`) so the agent doesn’t spend tokens on syncing.
+
+## Scripts
+
+| Script | Purpose |
+|--------|--------|
+| `node scripts/ensure-income-deductions.js` | One-time: create `income` and `deductions` tables; migrate from `expenses` if present. Run from `services/dashboard` with `DATABASE_URL` in env or `.env.local`. |
 
 ## License
 

@@ -47,11 +47,48 @@ CREATE TABLE plaid_link_state (
 
 COMMENT ON TABLE plaid_link_state IS 'Plaid access token and linked institution; single row for one bank account.';
 
--- Single-row table holding the markdown rules document the classification agent reads.
+-- One row per classification rule; agent reads these when classifying transactions as income vs deductions.
 CREATE TABLE agent_rules (
+  id serial PRIMARY KEY,
+  content text NOT NULL DEFAULT '',
+  sort_order integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE agent_rules IS 'Per-rule rows for the classification agent; each rule is one row with CRUD.';
+
+-- Single-row table storing the agent prompt (system/instruction text for the classification agent).
+CREATE TABLE agent_prompt (
   id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   content text NOT NULL DEFAULT '',
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-COMMENT ON TABLE agent_rules IS 'Markdown rules for the agent when classifying transactions as income vs expenses.';
+COMMENT ON TABLE agent_prompt IS 'Single row: agent prompt/instructions for classification.';
+
+-- Income: matches example table (Date received, Payer/source, Description, Amount, Proof).
+CREATE TABLE income (
+  id serial PRIMARY KEY,
+  date date NOT NULL,
+  name text,
+  description text,
+  amount numeric NOT NULL,
+  proof text NOT NULL UNIQUE REFERENCES transactions(transaction_id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE income IS 'Income records; proof links to transactions.transaction_id.';
+
+-- Deductions: matches example table (Date incurred, Payee, Description, Amount paid, Proof of payment).
+CREATE TABLE deductions (
+  id serial PRIMARY KEY,
+  date date NOT NULL,
+  name text,
+  description text,
+  amount numeric NOT NULL,
+  proof text NOT NULL UNIQUE REFERENCES transactions(transaction_id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE deductions IS 'Deduction records; proof links to transactions.transaction_id.';

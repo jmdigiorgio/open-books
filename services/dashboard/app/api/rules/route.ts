@@ -1,15 +1,15 @@
 /**
- * GET /api/rules – Return the agent rules markdown content and updated_at.
- * PUT /api/rules – Update the content. Body: { content: string }.
+ * GET /api/rules – List all rules (one row per rule).
+ * POST /api/rules – Create a rule. Body: { content: string, sortOrder?: number }.
  */
 
 import { NextResponse } from "next/server";
-import { getRulesContent, setRulesContent } from "@/lib/rules";
+import { listRules, createRule } from "@/lib/rules";
 
 export async function GET() {
   try {
-    const { content, updatedAt } = await getRulesContent();
-    return NextResponse.json({ content, updatedAt });
+    const rules = await listRules();
+    return NextResponse.json({ rules });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Failed to load rules";
     console.error("[rules] GET Error:", message);
@@ -17,16 +17,16 @@ export async function GET() {
   }
 }
 
-export async function PUT(request: Request) {
+export async function POST(request: Request) {
   try {
     const body = await request.json();
     const content = typeof body?.content === "string" ? body.content : "";
-    await setRulesContent(content);
-    const { updatedAt } = await getRulesContent();
-    return NextResponse.json({ ok: true, updatedAt });
+    const sortOrder = typeof body?.sortOrder === "number" ? body.sortOrder : undefined;
+    const rule = await createRule(content, sortOrder);
+    return NextResponse.json(rule);
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Failed to save rules";
-    console.error("[rules] PUT Error:", message);
+    const message = e instanceof Error ? e.message : "Failed to create rule";
+    console.error("[rules] POST Error:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
