@@ -92,3 +92,17 @@ CREATE TABLE deductions (
 );
 
 COMMENT ON TABLE deductions IS 'Deduction records; proof links to transactions.transaction_id.';
+
+-- Transactions the classification agent could not categorize (after attempting research).
+-- One row per transaction; reason explains why it was left uncategorized.
+CREATE TABLE uncategorized (
+  id serial PRIMARY KEY,
+  transaction_id text NOT NULL UNIQUE REFERENCES transactions(transaction_id) ON DELETE CASCADE,
+  date date NOT NULL,
+  description text,
+  amount numeric NOT NULL,
+  reason text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE uncategorized IS 'Transactions the agent could not classify as income or deduction; reason explains why.';

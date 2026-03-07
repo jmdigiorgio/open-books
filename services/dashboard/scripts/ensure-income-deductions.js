@@ -1,5 +1,5 @@
 /**
- * One-time script: create income and deductions tables if missing.
+ * One-time script: create income, deductions, and uncategorized tables if missing.
  * Migrates from expenses -> deductions if expenses exists.
  * Run from dashboard dir: node scripts/ensure-income-deductions.js
  * Loads .env.local for DATABASE_URL if present.
@@ -71,6 +71,24 @@ async function run() {
     } else {
       await client.query("ALTER TABLE deductions ADD COLUMN IF NOT EXISTS description text");
       console.log("Ensured deductions has description.");
+    }
+
+    const hasUncategorized = await client.query(
+      "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'uncategorized'"
+    );
+    if (hasUncategorized.rows.length === 0) {
+      await client.query(`
+        CREATE TABLE uncategorized (
+          id serial PRIMARY KEY,
+          transaction_id text NOT NULL UNIQUE REFERENCES transactions(transaction_id) ON DELETE CASCADE,
+          date date NOT NULL,
+          description text,
+          amount numeric NOT NULL,
+          reason text NOT NULL DEFAULT '',
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      console.log("Created table uncategorized.");
     }
 
     const hasExpenses = await client.query(
