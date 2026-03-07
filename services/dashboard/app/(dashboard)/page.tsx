@@ -28,6 +28,17 @@ interface Transaction {
   payment_channel: string | null;
 }
 
+/** Shape of an income or deduction row returned by GET /api/income or /api/deductions. */
+interface LedgerRow {
+  id: number;
+  date: string;
+  name: string | null;
+  description: string | null;
+  amount: number;
+  proof: string;
+  created_at: string;
+}
+
 /** Format transaction date/time in the user's locale and timezone. Uses datetime when present, else date. */
 function formatTxnDate(date: string, datetime: string | null): string {
   if (datetime) {
@@ -146,6 +157,12 @@ export default function DashboardPage() {
   /** Guard so auto-sync fires only once per page load. */
   const didAutoSync = useRef(false);
 
+  /* ---- CSV upload state ---- */
+  const [csvFormat, setCsvFormat] = useState("novo");
+  const [csvUploading, setCsvUploading] = useState(false);
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const [csvSuccess, setCsvSuccess] = useState<string | null>(null);
+
   /** Fetch transactions from our DB for the selected year. */
   const fetchTransactions = useCallback(async (year: number) => {
     setTxnLoading(true);
@@ -199,6 +216,60 @@ export default function DashboardPage() {
       fetchTransactions(selectedYear);
     })();
   }, [bankLinked, fetchTransactions, selectedYear]);
+
+  /** Upload a bank CSV: parse, dedup against existing, insert new rows. */
+  const handleCsvUpload = useCallback(
+    async (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      const form = e.currentTarget;
+      const fileInput = form.querySelector<HTMLInputElement>('input[type="file"]');
+      const file = fileInput?.files?.[0];
+      if (!file) {
+        setCsvError("Please select a CSV file");
+        return;
+      }
+      setCsvUploading(true);
+      setCsvError(null);
+      setCsvSuccess(null);
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("format", csvFormat);
+        const res = await fetch("/api/transactions/upload", { method: "POST", body: formData });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error ?? "Upload failed");
+        setCsvSuccess(
+          `Imported ${data.inserted ?? 0} new transactions, skipped ${data.skippedDuplicate ?? 0} duplicates.`
+        );
+        fileInput.value = "";
+        await fetchTransactions(selectedYear);
+      } catch (err) {
+        setCsvError(err instanceof Error ? err.message : "Upload failed");
+      } finally {
+        setCsvUploading(false);
+      }
+    },
+    [fetchTransactions, selectedYear]
+  );
+
+  /** Delete a single transaction by ID, then refresh the table. */
+  const handleDeleteTransaction = useCallback(
+    async (txnId: string) => {
+      try {
+        const res = await fetch(`/api/transactions?id=${encodeURIComponent(txnId)}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => null);
+          throw new Error(data?.error ?? "Delete failed");
+        }
+        await fetchTransactions(selectedYear);
+      } catch (e) {
+        setSyncError(e instanceof Error ? e.message : "Delete failed");
+      }
+    },
+    [fetchTransactions, selectedYear]
+  );
 
   /** When year changes, re-fetch from DB. */
   useEffect(() => {
@@ -274,6 +345,142 @@ export default function DashboardPage() {
     },
     [fetchMileage]
   );
+
+  /* ---- Income CRUD ---- */
+  const [incomeRows, setIncomeRows] = useState<LedgerRow[]>([]);
+  const [incomeLoading, setIncomeLoading] = useState(false);
+  const [incomeError, setIncomeError] = useState<string | null>(null);
+  const [incomeAdding, setIncomeAdding] = useState(false);
+  const [incomeForm, setIncomeForm] = useState({ date: "", name: "", description: "", amount: "", proof: "" });
+
+  const fetchIncome = useCallback(async () => {
+    setIncomeLoading(true);
+    setIncomeError(null);
+    try {
+      const res = await fetch("/api/income");
+      if (!res.ok) throw new Error("Failed to load income");
+      const data = await res.json();
+      setIncomeRows(data.rows ?? []);
+    } catch {
+      setIncomeError("Could not load income data");
+    } finally {
+      setIncomeLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "income" || tab === "summary") fetchIncome();
+  }, [tab, fetchIncome]);
+
+  const handleAddIncome = useCallback(async () => {
+    if (!incomeForm.date || !incomeForm.amount) return;
+    setIncomeError(null);
+    try {
+      const res = await fetch("/api/income", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date: incomeForm.date,
+          name: incomeForm.name || null,
+          description: incomeForm.description || null,
+          amount: parseFloat(incomeForm.amount),
+          proof: incomeForm.proof || "",
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? "Failed to add income");
+      }
+      const row = await res.json();
+      setIncomeRows((prev) => [row, ...prev]);
+      setIncomeForm({ date: "", name: "", description: "", amount: "", proof: "" });
+      setIncomeAdding(false);
+    } catch (e) {
+      setIncomeError(e instanceof Error ? e.message : "Failed to add income");
+    }
+  }, [incomeForm]);
+
+  const handleDeleteIncome = useCallback(async (id: number) => {
+    setIncomeError(null);
+    try {
+      const res = await fetch(`/api/income?id=${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? "Failed to delete");
+      }
+      setIncomeRows((prev) => prev.filter((r) => r.id !== id));
+    } catch (e) {
+      setIncomeError(e instanceof Error ? e.message : "Failed to delete");
+    }
+  }, []);
+
+  /* ---- Deductions CRUD ---- */
+  const [deductionRows, setDeductionRows] = useState<LedgerRow[]>([]);
+  const [deductionLoading, setDeductionLoading] = useState(false);
+  const [deductionError, setDeductionError] = useState<string | null>(null);
+  const [deductionAdding, setDeductionAdding] = useState(false);
+  const [deductionForm, setDeductionForm] = useState({ date: "", name: "", description: "", amount: "", proof: "" });
+
+  const fetchDeductions = useCallback(async () => {
+    setDeductionLoading(true);
+    setDeductionError(null);
+    try {
+      const res = await fetch("/api/deductions");
+      if (!res.ok) throw new Error("Failed to load deductions");
+      const data = await res.json();
+      setDeductionRows(data.rows ?? []);
+    } catch {
+      setDeductionError("Could not load deductions data");
+    } finally {
+      setDeductionLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "deductions" || tab === "summary") fetchDeductions();
+  }, [tab, fetchDeductions]);
+
+  const handleAddDeduction = useCallback(async () => {
+    if (!deductionForm.date || !deductionForm.amount) return;
+    setDeductionError(null);
+    try {
+      const res = await fetch("/api/deductions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date: deductionForm.date,
+          name: deductionForm.name || null,
+          description: deductionForm.description || null,
+          amount: parseFloat(deductionForm.amount),
+          proof: deductionForm.proof || "",
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? "Failed to add deduction");
+      }
+      const row = await res.json();
+      setDeductionRows((prev) => [row, ...prev]);
+      setDeductionForm({ date: "", name: "", description: "", amount: "", proof: "" });
+      setDeductionAdding(false);
+    } catch (e) {
+      setDeductionError(e instanceof Error ? e.message : "Failed to add deduction");
+    }
+  }, [deductionForm]);
+
+  const handleDeleteDeduction = useCallback(async (id: number) => {
+    setDeductionError(null);
+    try {
+      const res = await fetch(`/api/deductions?id=${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? "Failed to delete");
+      }
+      setDeductionRows((prev) => prev.filter((r) => r.id !== id));
+    } catch (e) {
+      setDeductionError(e instanceof Error ? e.message : "Failed to delete");
+    }
+  }, []);
 
   /* ---- Rules (agent classification): one row per rule, CRUD ---- */
   const [rules, setRules] = useState<RuleRow[]>([]);
@@ -696,152 +903,188 @@ export default function DashboardPage() {
         )}
         {tab === "deductions" && (
           <section aria-label="Deductions">
-            <h2 className="mb-4 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-              Deductions
-            </h2>
-            <p className="mb-4 text-zinc-600 dark:text-zinc-400">
-              Example of an IRS-compliant deduction record. The IRS expects: who was paid (payee),
-              amount, proof of payment, date incurred, and a description of what was purchased or
-              the service received.
-            </p>
-            <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
-              <table className="w-full text-left text-sm">
-                <thead className="border-b border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900">
-                  <tr>
-                    <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">
-                      Date incurred
-                    </th>
-                    <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">
-                      Payee
-                    </th>
-                    <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">
-                      Description
-                    </th>
-                    <th className="px-3 py-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
-                      Amount paid
-                    </th>
-                    <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">
-                      Proof of payment
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                  <tr className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
-                    <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
-                      2024-01-15
-                    </td>
-                    <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">Office Depot</td>
-                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">
-                      Printer paper, toner (business use)
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">
-                      $47.23
-                    </td>
-                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">CC ****4521</td>
-                  </tr>
-                  <tr className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
-                    <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
-                      2024-01-22
-                    </td>
-                    <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">Cloud Hosting Co</td>
-                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">
-                      Monthly server (Jan 2024)
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">
-                      $89.00
-                    </td>
-                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">Receipt #8842</td>
-                  </tr>
-                  <tr className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
-                    <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
-                      2024-02-01
-                    </td>
-                    <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">FedEx</td>
-                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">
-                      Shipping for client deliverables
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">
-                      $32.50
-                    </td>
-                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">Check #1204</td>
-                  </tr>
-                </tbody>
-              </table>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+                Deductions
+              </h2>
+              <button
+                type="button"
+                onClick={() => setDeductionAdding((v) => !v)}
+                className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              >
+                {deductionAdding ? "Cancel" : "Add"}
+              </button>
             </div>
+
+            {deductionError && (
+              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                {deductionError}
+              </div>
+            )}
+
+            {deductionAdding && (
+              <div className="mb-4 flex flex-wrap items-end gap-2 rounded border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Date
+                  <input type="date" value={deductionForm.date} onChange={(e) => setDeductionForm((f) => ({ ...f, date: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Payee
+                  <input type="text" placeholder="Who was paid" value={deductionForm.name} onChange={(e) => setDeductionForm((f) => ({ ...f, name: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Description
+                  <input type="text" placeholder="What was purchased" value={deductionForm.description} onChange={(e) => setDeductionForm((f) => ({ ...f, description: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Amount
+                  <input type="number" step="0.01" placeholder="0.00" value={deductionForm.amount} onChange={(e) => setDeductionForm((f) => ({ ...f, amount: e.target.value }))} className="w-28 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Proof
+                  <input type="text" placeholder="Receipt, txn ID, etc." value={deductionForm.proof} onChange={(e) => setDeductionForm((f) => ({ ...f, proof: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <button type="button" onClick={handleAddDeduction} className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500">
+                  Save
+                </button>
+              </div>
+            )}
+
+            {deductionLoading ? (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
+            ) : deductionRows.length === 0 ? (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">No deductions yet.</p>
+            ) : (
+              <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
+                <table className="w-full text-left text-sm">
+                  <thead className="border-b border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900">
+                    <tr>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Date</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Payee</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Description</th>
+                      <th className="px-3 py-2 text-right font-medium text-zinc-600 dark:text-zinc-400">Amount</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Proof</th>
+                      <th className="w-16 px-3 py-2" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                    {deductionRows.map((row) => (
+                      <tr key={row.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
+                        <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
+                          {new Date(row.date).toLocaleDateString()}
+                        </td>
+                        <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">{row.name ?? "—"}</td>
+                        <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{row.description ?? "—"}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">
+                          ${Number(row.amount).toFixed(2)}
+                        </td>
+                        <td className="max-w-0 truncate px-3 py-2 font-mono text-xs text-zinc-500 dark:text-zinc-400" title={row.proof}>
+                          {row.proof || "—"}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <button type="button" onClick={() => handleDeleteDeduction(row.id)} className="rounded px-1.5 py-0.5 text-xs text-red-500 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950/30 dark:hover:text-red-300" title="Delete">
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         )}
         {tab === "income" && (
           <section aria-label="Income">
-            <h2 className="mb-4 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-              Income
-            </h2>
-            <p className="mb-4 text-zinc-600 dark:text-zinc-400">
-              Example of an IRS-compliant income record. The IRS expects records sufficient to show
-              gross income: source of payment, amount, date received, and supporting documentation
-              (e.g. 1099, W-2, deposit slip, invoice).
-            </p>
-            <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
-              <table className="w-full text-left text-sm">
-                <thead className="border-b border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900">
-                  <tr>
-                    <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">
-                      Date received
-                    </th>
-                    <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">
-                      Payer / source
-                    </th>
-                    <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">
-                      Description
-                    </th>
-                    <th className="px-3 py-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
-                      Amount
-                    </th>
-                    <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">
-                      Proof
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                  <tr className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
-                    <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
-                      2024-01-31
-                    </td>
-                    <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">Acme Corp</td>
-                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">
-                      Consulting (Jan 2024)
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">
-                      $4,500.00
-                    </td>
-                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">1099-NEC; Deposit slip</td>
-                  </tr>
-                  <tr className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
-                    <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
-                      2024-02-15
-                    </td>
-                    <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">Employer Inc</td>
-                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">W-2 wages</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">
-                      $3,200.00
-                    </td>
-                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">W-2; Pay stub</td>
-                  </tr>
-                  <tr className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
-                    <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
-                      2024-03-01
-                    </td>
-                    <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">Client LLC</td>
-                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">
-                      Project invoice #2104
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">
-                      $1,850.00
-                    </td>
-                    <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">Invoice; ACH confirmation</td>
-                  </tr>
-                </tbody>
-              </table>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+                Income
+              </h2>
+              <button
+                type="button"
+                onClick={() => setIncomeAdding((v) => !v)}
+                className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              >
+                {incomeAdding ? "Cancel" : "Add"}
+              </button>
             </div>
+
+            {incomeError && (
+              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                {incomeError}
+              </div>
+            )}
+
+            {incomeAdding && (
+              <div className="mb-4 flex flex-wrap items-end gap-2 rounded border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Date
+                  <input type="date" value={incomeForm.date} onChange={(e) => setIncomeForm((f) => ({ ...f, date: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Payer / source
+                  <input type="text" placeholder="Who paid you" value={incomeForm.name} onChange={(e) => setIncomeForm((f) => ({ ...f, name: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Description
+                  <input type="text" placeholder="Source of income" value={incomeForm.description} onChange={(e) => setIncomeForm((f) => ({ ...f, description: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Amount
+                  <input type="number" step="0.01" placeholder="0.00" value={incomeForm.amount} onChange={(e) => setIncomeForm((f) => ({ ...f, amount: e.target.value }))} className="w-28 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Proof
+                  <input type="text" placeholder="1099, deposit slip, etc." value={incomeForm.proof} onChange={(e) => setIncomeForm((f) => ({ ...f, proof: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <button type="button" onClick={handleAddIncome} className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500">
+                  Save
+                </button>
+              </div>
+            )}
+
+            {incomeLoading ? (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
+            ) : incomeRows.length === 0 ? (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">No income records yet.</p>
+            ) : (
+              <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
+                <table className="w-full text-left text-sm">
+                  <thead className="border-b border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900">
+                    <tr>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Date</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Payer / source</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Description</th>
+                      <th className="px-3 py-2 text-right font-medium text-zinc-600 dark:text-zinc-400">Amount</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Proof</th>
+                      <th className="w-16 px-3 py-2" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                    {incomeRows.map((row) => (
+                      <tr key={row.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
+                        <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
+                          {new Date(row.date).toLocaleDateString()}
+                        </td>
+                        <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">{row.name ?? "—"}</td>
+                        <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{row.description ?? "—"}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">
+                          ${Number(row.amount).toFixed(2)}
+                        </td>
+                        <td className="max-w-0 truncate px-3 py-2 font-mono text-xs text-zinc-500 dark:text-zinc-400" title={row.proof}>
+                          {row.proof || "—"}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <button type="button" onClick={() => handleDeleteIncome(row.id)} className="rounded px-1.5 py-0.5 text-xs text-red-500 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950/30 dark:hover:text-red-300" title="Delete">
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         )}
         {tab === "mileage" && (
@@ -974,6 +1217,47 @@ export default function DashboardPage() {
               </div>
             )}
 
+            {/* CSV upload form for importing bank transaction exports. */}
+            <form onSubmit={handleCsvUpload} className="mb-4 flex flex-wrap items-end gap-3">
+              <label className="flex flex-col gap-1 text-sm text-zinc-600 dark:text-zinc-400">
+                Bank format
+                <select
+                  value={csvFormat}
+                  onChange={(e) => setCsvFormat(e.target.value)}
+                  className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                  disabled={csvUploading}
+                >
+                  <option value="novo">Novo</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-sm text-zinc-600 dark:text-zinc-400">
+                CSV file
+                <input
+                  type="file"
+                  accept=".csv"
+                  className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                  disabled={csvUploading}
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={csvUploading}
+                className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              >
+                {csvUploading ? "Importing…" : "Import"}
+              </button>
+            </form>
+            {csvError && (
+              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                {csvError}
+              </div>
+            )}
+            {csvSuccess && (
+              <div className="mb-4 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
+                {csvSuccess}
+              </div>
+            )}
+
             {txnLoading ? (
               <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
             ) : transactions.length === 0 ? (
@@ -992,6 +1276,7 @@ export default function DashboardPage() {
                       <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Description</th>
                       <th className="px-3 py-2 text-right font-medium text-zinc-600 dark:text-zinc-400">Amount</th>
                       <th className="px-3 py-2 text-center font-medium text-zinc-600 dark:text-zinc-400">Status</th>
+                      <th className="w-16 px-3 py-2" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -1028,6 +1313,16 @@ export default function DashboardPage() {
                               Posted
                             </span>
                           )}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTransaction(txn.transaction_id)}
+                            className="rounded px-1.5 py-0.5 text-xs text-red-500 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950/30 dark:hover:text-red-300"
+                            title="Delete transaction"
+                          >
+                            ✕
+                          </button>
                         </td>
                       </tr>
                     ))}
