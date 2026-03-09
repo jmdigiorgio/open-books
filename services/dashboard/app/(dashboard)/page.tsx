@@ -302,6 +302,8 @@ export default function DashboardPage() {
   const [mileageUploading, setMileageUploading] = useState(false);
   const [mileageError, setMileageError] = useState<string | null>(null);
   const [mileageSuccess, setMileageSuccess] = useState<string | null>(null);
+  /** When true, upload replaces all mileage rows; when false, upload appends to existing (default). */
+  const [mileageReplaceExisting, setMileageReplaceExisting] = useState(false);
 
   /** Fetch mileage table data from the API. */
   const fetchMileage = useCallback(async () => {
@@ -344,16 +346,18 @@ export default function DashboardPage() {
       try {
         const formData = new FormData();
         formData.append("file", file);
+        if (mileageReplaceExisting) formData.append("replace", "true");
         const res = await fetch("/api/mileage/upload", { method: "POST", body: formData });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           throw new Error(data?.error ?? "Upload failed");
         }
-        setMileageSuccess(
-          data.tableCreated
-            ? `Table created with ${data.rowsInserted ?? 0} rows.`
-            : `Replaced with ${data.rowsReplaced ?? 0} rows.`
-        );
+        const msg = data.tableCreated
+          ? `Table created with ${data.rowsInserted ?? 0} rows.`
+          : data.rowsAppended != null
+            ? `Appended ${data.rowsAppended} rows.`
+            : `Replaced with ${data.rowsReplaced ?? 0} rows.`;
+        setMileageSuccess(msg);
         fileInput.value = "";
         await fetchMileage();
       } catch (e) {
@@ -362,7 +366,7 @@ export default function DashboardPage() {
         setMileageUploading(false);
       }
     },
-    [fetchMileage]
+    [fetchMileage, mileageReplaceExisting]
   );
 
   /* ---- Income CRUD ---- */
@@ -818,6 +822,25 @@ export default function DashboardPage() {
     });
   }, [mileageColumns, mileageRows, selectedYear]);
 
+  /** Summary totals for the selected year: income, business deductions, total deductions, taxable income. */
+  const {
+    summaryGrossIncome,
+    summaryBusinessDeductions,
+    summaryTotalDeductions,
+    summaryTaxableIncome,
+  } = useMemo(() => {
+    const gross = incomeRowsFiltered.reduce((sum, r) => sum + Number(r.amount), 0);
+    const business = deductionRowsFiltered.reduce((sum, r) => sum + Number(r.amount), 0);
+    const totalDeductions = business + summaryMileageDeduction;
+    const taxable = gross - totalDeductions;
+    return {
+      summaryGrossIncome: Math.round(gross * 100) / 100,
+      summaryBusinessDeductions: Math.round(business * 100) / 100,
+      summaryTotalDeductions: Math.round(totalDeductions * 100) / 100,
+      summaryTaxableIncome: Math.round(taxable * 100) / 100,
+    };
+  }, [incomeRowsFiltered, deductionRowsFiltered, summaryMileageDeduction]);
+
   /**
    * Format an amount for display. Plaid amounts are positive for debits
    * (money leaving the account) and negative for credits (money coming in).
@@ -1038,7 +1061,7 @@ export default function DashboardPage() {
                       Gross income
                     </p>
                     <p className="mt-1 text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
-                      $42,350
+                      ${summaryGrossIncome.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                   </div>
                   <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
@@ -1061,7 +1084,7 @@ export default function DashboardPage() {
                       Business deductions
                     </p>
                     <p className="mt-1 text-2xl font-semibold text-red-600 dark:text-red-400">
-                      $28,190
+                      ${summaryBusinessDeductions.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                   </div>
                   <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
@@ -1077,7 +1100,7 @@ export default function DashboardPage() {
                       Total deductions
                     </p>
                     <p className="mt-1 text-2xl font-semibold text-red-600 dark:text-red-400">
-                      ${(28190 + summaryMileageDeduction).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      ${summaryTotalDeductions.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                   </div>
                 </div>
@@ -1093,14 +1116,14 @@ export default function DashboardPage() {
                     </p>
                     <p
                       className={`mt-1 text-2xl font-semibold ${
-                        42350 - (28190 + summaryMileageDeduction) > 0
+                        summaryTaxableIncome > 0
                           ? "text-emerald-600 dark:text-emerald-400"
-                          : 42350 - (28190 + summaryMileageDeduction) < 0
+                          : summaryTaxableIncome < 0
                             ? "text-red-600 dark:text-red-400"
                             : "text-zinc-900 dark:text-zinc-100"
                       }`}
                     >
-                      ${(42350 - (28190 + summaryMileageDeduction)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      ${summaryTaxableIncome.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                   </div>
                 </div>
@@ -1443,9 +1466,10 @@ export default function DashboardPage() {
               </select>
             </div>
             <p className="mb-4 text-zinc-600 dark:text-zinc-400">
-              Upload a CSV to create or replace the mileage table. The table structure matches your
+              Upload a CSV to create or add to the mileage table. The table structure matches your
               CSV headers. If the table already exists, the CSV must have the same columns in the
-              same order.
+              same order. By default new rows are appended; check &quot;Replace existing data&quot; to
+              clear and replace all mileage.
             </p>
             <form onSubmit={handleMileageUpload} className="mb-4 flex flex-wrap items-end gap-3">
               <label className="flex flex-col gap-1 text-sm text-zinc-600 dark:text-zinc-400">
@@ -1456,6 +1480,16 @@ export default function DashboardPage() {
                   className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                   disabled={mileageUploading}
                 />
+              </label>
+              <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={mileageReplaceExisting}
+                  onChange={(e) => setMileageReplaceExisting(e.target.checked)}
+                  disabled={mileageUploading}
+                  className="rounded border-zinc-300 dark:border-zinc-600"
+                />
+                Replace existing data
               </label>
               <button
                 type="submit"

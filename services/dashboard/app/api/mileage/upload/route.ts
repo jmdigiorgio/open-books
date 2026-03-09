@@ -4,9 +4,11 @@
  * - If the mileage table does not exist: create it with columns derived from the CSV header
  *   (sanitized names), then insert all rows.
  * - If the table exists and the CSV has a different set/order of columns: return 400.
- * - If the table exists and columns match: truncate and replace all rows with the CSV data.
+ * - If the table exists and columns match:
+ *   - By default (replace not "true"): append CSV rows to existing data.
+ *   - If form field replace="true": truncate and replace all rows with the CSV data.
  *
- * Body: multipart/form-data with a single file field (e.g. "file").
+ * Body: multipart/form-data with "file" (required) and optional "replace" (string "true" to replace all).
  */
 
 import { NextResponse } from "next/server";
@@ -17,6 +19,7 @@ import {
   getMileageColumnNames,
   createMileageTable,
   replaceMileageRows,
+  appendMileageRows,
 } from "@/lib/mileage";
 
 function arraysEqual(a: string[], b: string[]): boolean {
@@ -66,8 +69,13 @@ export async function POST(request: Request) {
         });
         return row;
       });
-      await replaceMileageRows(sanitizedColumns, rows);
-      return NextResponse.json({ ok: true, rowsReplaced: rows.length });
+      const replace = formData.get("replace") === "true";
+      if (replace) {
+        await replaceMileageRows(sanitizedColumns, rows);
+        return NextResponse.json({ ok: true, rowsReplaced: rows.length });
+      }
+      await appendMileageRows(sanitizedColumns, rows);
+      return NextResponse.json({ ok: true, rowsAppended: rows.length });
     }
 
     /* Table does not exist: create it and insert. */

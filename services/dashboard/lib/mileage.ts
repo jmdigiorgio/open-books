@@ -90,3 +90,17 @@ export async function replaceMileageRows(columnNames: string[], rows: Record<str
     await pool.query(`INSERT INTO ${MILEAGE_TABLE} (${quoted}) VALUES (${placeholders})`, values);
   }
 }
+
+/**
+ * Append rows to the mileage table. Columns must match existing table. Does not truncate.
+ */
+export async function appendMileageRows(columnNames: string[], rows: Record<string, string>[]): Promise<void> {
+  if (rows.length === 0) return;
+  const pool = getPool();
+  const quoted = columnNames.map((c) => `"${c}"`).join(", ");
+  const placeholders = columnNames.map((_, i) => `$${i + 1}`).join(", ");
+  for (const row of rows) {
+    const values = columnNames.map((c) => row[c] ?? "");
+    await pool.query(`INSERT INTO ${MILEAGE_TABLE} (${quoted}) VALUES (${placeholders})`, values);
+  }
+}
