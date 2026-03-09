@@ -1,0 +1,105 @@
+@startuml OpenBooks System Sequence
+title OpenBooks 
+
+actor User
+participant "Dashboard\n(Next.js UI)" as UI
+participant "Next.js API" as API
+participant "Plaid API" as Plaid
+database "Postgres" as DB
+participant "Classification\nAgent" as Agent
+
+== Auth ==
+User -> UI : Enter password
+UI -> API : POST /api/auth
+API -> API : Verify password, set cookie
+API --> UI : 200 + Set-Cookie
+UI --> User : Dashboard
+
+User -> UI : Click Logout
+UI -> API : POST /api/auth/logout
+API -> API : Clear cookie
+API --> UI : redirect to login
+
+== Link bank (one-time) ==
+User -> UI : Click "Link bank"
+UI -> API : GET /api/plaid/status
+API -> DB : Check plaid_link_state (or token file)
+DB --> API : linked / not linked
+API --> UI : { linked }
+alt Not linked
+  UI -> API : GET /api/plaid/link-token
+  API -> Plaid : Create link_token (client_id, secret)
+  Plaid --> API : link_token
+  API --> UI : { link_token }
+  UI -> UI : Open Plaid Link (popup)
+  User -> UI : Select institution, complete Link
+  UI -> API : POST /api/plaid/exchange { public_token }
+  API -> Plaid : Exchange public_token for access_token
+  Plaid --> API : access_token, item_id
+  API -> DB : Store access_token (plaid_link_state / file)
+  API --> UI : { success: true }
+  UI --> User : Bank linked
+end
+
+== Sync transactions (manual or cron) ==
+User -> UI : Click Sync (or cron hits API)
+UI -> API : GET /api/plaid/sync
+API -> DB : SELECT cursor FROM sync_state
+DB --> API : cursor
+loop Until has_more = false
+  API -> Plaid : transactionsSync(access_token, cursor)
+  Plaid --> API : added, modified, removed, next_cursor
+  API -> DB : Upsert transactions; delete removed; UPDATE sync_state
+end
+API --> UI : { added, modified, removed, syncedAt }
+UI --> User : Sync complete
+
+== Read data (dashboard tabs) ==
+User -> UI : Open tab (Transactions / Income / Deductions / etc.)
+UI -> API : GET /api/transactions | /api/income | /api/deductions | ...
+API -> DB : SELECT from transactions | income | deductions | rules | mileage
+DB --> API : rows
+API --> UI : JSON
+UI --> User : Render table
+
+== Classify (agent) ==
+User -> UI : Click "Classify" (or "Clear" then "Classify")
+opt Clear first
+  User -> UI : Click "Clear"
+  UI -> API : POST /api/agent/clear
+  API -> DB : Truncate income, deductions, uncategorized
+  API --> UI : 200
+end
+UI -> API : POST /api/agent/run
+API -> Agent : POST {AGENT_URL}/run (with API key)
+Agent -> DB : Read transactions, agent_rules, agent_prompt
+Agent -> Agent : Classify into income / deduction / uncategorized
+Agent -> DB : INSERT into income, deductions, uncategorized
+Agent --> API : 200
+API --> UI : 200
+note over UI : UI polls GET /api/agent/progress for current/total
+opt User cancels
+  User -> UI : Click "Cancel"
+  UI -> API : POST /api/agent/cancel
+  API -> Agent : POST .../run/cancel
+  Agent --> API : 200
+  API --> UI : 200
+end
+UI --> User : Classification done
+
+== Optional: CSV upload ==
+User -> UI : Upload transactions or mileage CSV
+UI -> API : POST /api/transactions/upload or /api/mileage/upload (multipart)
+API -> DB : INSERT/upsert from parsed CSV
+API --> UI : result
+UI --> User : Upload complete
+
+== Optional: Income / Deductions / Rules CRUD ==
+User -> UI : Add or edit income, deduction, or rule
+UI -> API : POST/PATCH/DELETE /api/income | /api/deductions | /api/rules/[id]
+API -> DB : INSERT | UPDATE | DELETE
+DB --> API : ok
+API --> UI : 200
+UI --> User : Saved
+
+@enduml
