@@ -92,15 +92,35 @@ export async function replaceMileageRows(columnNames: string[], rows: Record<str
 }
 
 /**
- * Append rows to the mileage table. Columns must match existing table. Does not truncate.
+ * Append rows to the mileage table, skipping duplicates.
+ * A row is considered a duplicate if an existing row has the same date and distance values.
+ * Columns must match existing table. Does not truncate.
+ * Returns the number of rows actually inserted (after skipping duplicates).
  */
-export async function appendMileageRows(columnNames: string[], rows: Record<string, string>[]): Promise<void> {
-  if (rows.length === 0) return;
+export async function appendMileageRows(columnNames: string[], rows: Record<string, string>[]): Promise<number> {
+  if (rows.length === 0) return 0;
   const pool = getPool();
+
+  /* Find date and distance columns for duplicate detection. */
+  const dateCol = columnNames.find((c) => c === "date" || c.includes("date"));
+  const distCol = columnNames.find((c) => c === "distance" || c.includes("distance") || c.includes("miles"));
+
   const quoted = columnNames.map((c) => `"${c}"`).join(", ");
   const placeholders = columnNames.map((_, i) => `$${i + 1}`).join(", ");
+
+  let inserted = 0;
   for (const row of rows) {
+    /* Skip duplicates: if we have both a date and distance column, check for existing match. */
+    if (dateCol && distCol) {
+      const existing = await pool.query(
+        `SELECT 1 FROM ${MILEAGE_TABLE} WHERE "${dateCol}" = $1 AND "${distCol}" = $2 LIMIT 1`,
+        [row[dateCol] ?? "", row[distCol] ?? ""]
+      );
+      if (existing.rows.length > 0) continue;
+    }
     const values = columnNames.map((c) => row[c] ?? "");
     await pool.query(`INSERT INTO ${MILEAGE_TABLE} (${quoted}) VALUES (${placeholders})`, values);
+    inserted++;
   }
+  return inserted;
 }

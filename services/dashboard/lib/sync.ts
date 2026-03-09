@@ -49,12 +49,29 @@ export async function syncTransactions(): Promise<SyncResult> {
 
   let hasMore = true;
   while (hasMore) {
-    const resp = await client.transactionsSync({
-      client_id: clientId,
-      secret,
-      access_token: accessToken,
-      cursor: cursor || undefined,
-    });
+    let resp;
+    try {
+      resp = await client.transactionsSync({
+        client_id: clientId,
+        secret,
+        access_token: accessToken,
+        cursor: cursor || undefined,
+      });
+    } catch (err: unknown) {
+      /* If the cursor is stale (e.g. after re-linking), reset and retry a full pull. */
+      const plaidErr = err as { response?: { data?: { error_code?: string; error_message?: string } } };
+      const code = plaidErr.response?.data?.error_code ?? "";
+      const msg = plaidErr.response?.data?.error_message ?? "";
+      if (cursor && code === "INVALID_FIELD" && msg.includes("cursor not associated")) {
+        console.warn("[sync] Stale cursor detected — resetting and retrying full sync");
+        cursor = "";
+        allAdded.length = 0;
+        allModified.length = 0;
+        allRemoved.length = 0;
+        continue;
+      }
+      throw err;
+    }
 
     const data = resp.data;
     allAdded.push(...data.added);

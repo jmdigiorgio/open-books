@@ -74,8 +74,9 @@ export async function POST(request: Request) {
         await replaceMileageRows(sanitizedColumns, rows);
         return NextResponse.json({ ok: true, rowsReplaced: rows.length });
       }
-      await appendMileageRows(sanitizedColumns, rows);
-      return NextResponse.json({ ok: true, rowsAppended: rows.length });
+      const inserted = await appendMileageRows(sanitizedColumns, rows);
+      const skipped = rows.length - inserted;
+      return NextResponse.json({ ok: true, rowsAppended: inserted, duplicatesSkipped: skipped });
     }
 
     /* Table does not exist: create it and insert. */

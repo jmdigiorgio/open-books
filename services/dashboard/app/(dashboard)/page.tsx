@@ -271,24 +271,6 @@ export default function DashboardPage() {
     [fetchTransactions, selectedYear]
   );
 
-  /** Delete a single transaction by ID, then refresh the table. */
-  const handleDeleteTransaction = useCallback(
-    async (txnId: string) => {
-      try {
-        const res = await fetch(`/api/transactions?id=${encodeURIComponent(txnId)}`, {
-          method: "DELETE",
-        });
-        if (!res.ok) {
-          const data = await res.json().catch(() => null);
-          throw new Error(data?.error ?? "Delete failed");
-        }
-        await fetchTransactions(selectedYear);
-      } catch (e) {
-        setSyncError(e instanceof Error ? e.message : "Delete failed");
-      }
-    },
-    [fetchTransactions, selectedYear]
-  );
 
   /** When year changes, re-fetch from DB. */
   useEffect(() => {
@@ -355,7 +337,7 @@ export default function DashboardPage() {
         const msg = data.tableCreated
           ? `Table created with ${data.rowsInserted ?? 0} rows.`
           : data.rowsAppended != null
-            ? `Appended ${data.rowsAppended} rows.`
+            ? `Appended ${data.rowsAppended} rows.${data.duplicatesSkipped ? ` ${data.duplicatesSkipped} duplicates skipped.` : ""}`
             : `Replaced with ${data.rowsReplaced ?? 0} rows.`;
         setMileageSuccess(msg);
         fileInput.value = "";
@@ -517,15 +499,20 @@ export default function DashboardPage() {
     }, 800);
     classifyProgressIntervalRef.current = progressInterval;
     fetch("/api/agent/run", { method: "POST", signal: controller.signal })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("Run failed"))))
-      .then(() => {
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setSyncError(data?.error ?? "Classification agent failed. Is the agent service running?");
+          return;
+        }
+        await res.json().catch(() => ({}));
         fetchIncome();
         fetchDeductions();
         fetchUncategorized();
       })
       .catch((err) => {
         if (err?.name !== "AbortError") {
-          console.error("[classify]", err);
+          setSyncError("Classification agent failed. Is the agent service running?");
         }
       })
       .finally(() => {
@@ -1161,8 +1148,9 @@ export default function DashboardPage() {
             </div>
 
             {deductionError && (
-              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
-                {deductionError}
+              <div className="mb-4 flex items-start justify-between rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                <span>{deductionError}</span>
+                <button type="button" onClick={() => setDeductionError(null)} className="ml-2 shrink-0 text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300">✕</button>
               </div>
             )}
 
@@ -1270,8 +1258,9 @@ export default function DashboardPage() {
               Transactions the classification agent could not classify as income or deduction. Run the agent to populate, or add manually.
             </p>
             {uncategorizedError && (
-              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
-                {uncategorizedError}
+              <div className="mb-4 flex items-start justify-between rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                <span>{uncategorizedError}</span>
+                <button type="button" onClick={() => setUncategorizedError(null)} className="ml-2 shrink-0 text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300">✕</button>
               </div>
             )}
             {uncategorizedAdding && (
@@ -1369,8 +1358,9 @@ export default function DashboardPage() {
             </div>
 
             {incomeError && (
-              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
-                {incomeError}
+              <div className="mb-4 flex items-start justify-between rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                <span>{incomeError}</span>
+                <button type="button" onClick={() => setIncomeError(null)} className="ml-2 shrink-0 text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300">✕</button>
               </div>
             )}
 
@@ -1500,13 +1490,15 @@ export default function DashboardPage() {
               </button>
             </form>
             {mileageError && (
-              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
-                {mileageError}
+              <div className="mb-4 flex items-start justify-between rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                <span>{mileageError}</span>
+                <button type="button" onClick={() => setMileageError(null)} className="ml-2 shrink-0 text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300">✕</button>
               </div>
             )}
             {mileageSuccess && (
-              <div className="mb-4 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
-                {mileageSuccess}
+              <div className="mb-4 flex items-start justify-between rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
+                <span>{mileageSuccess}</span>
+                <button type="button" onClick={() => setMileageSuccess(null)} className="ml-2 shrink-0 text-emerald-400 hover:text-emerald-600 dark:text-emerald-500 dark:hover:text-emerald-300">✕</button>
               </div>
             )}
             {mileageLoading ? (
@@ -1598,8 +1590,9 @@ export default function DashboardPage() {
             </div>
 
             {syncError && (
-              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
-                {syncError}
+              <div className="mb-4 flex items-start justify-between rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                <span>{syncError}</span>
+                <button type="button" onClick={() => setSyncError(null)} className="ml-2 shrink-0 text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300">✕</button>
               </div>
             )}
 
@@ -1634,13 +1627,15 @@ export default function DashboardPage() {
               </button>
             </form>
             {csvError && (
-              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
-                {csvError}
+              <div className="mb-4 flex items-start justify-between rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                <span>{csvError}</span>
+                <button type="button" onClick={() => setCsvError(null)} className="ml-2 shrink-0 text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300">✕</button>
               </div>
             )}
             {csvSuccess && (
-              <div className="mb-4 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
-                {csvSuccess}
+              <div className="mb-4 flex items-start justify-between rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
+                <span>{csvSuccess}</span>
+                <button type="button" onClick={() => setCsvSuccess(null)} className="ml-2 shrink-0 text-emerald-400 hover:text-emerald-600 dark:text-emerald-500 dark:hover:text-emerald-300">✕</button>
               </div>
             )}
 
@@ -1662,7 +1657,6 @@ export default function DashboardPage() {
                       <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Description</th>
                       <th className="px-3 py-2 text-right font-medium text-zinc-600 dark:text-zinc-400">Amount</th>
                       <th className="px-3 py-2 text-center font-medium text-zinc-600 dark:text-zinc-400">Status</th>
-                      <th className="w-16 px-3 py-2" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -1700,16 +1694,6 @@ export default function DashboardPage() {
                             </span>
                           )}
                         </td>
-                        <td className="px-3 py-2 text-center">
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteTransaction(txn.transaction_id)}
-                            className="rounded px-1.5 py-0.5 text-xs text-red-500 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950/30 dark:hover:text-red-300"
-                            title="Delete transaction"
-                          >
-                            ✕
-                          </button>
-                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1727,8 +1711,9 @@ export default function DashboardPage() {
               Rules help the agent classify transactions as income or deduction. Add rules when the automatic classification is wrong—for example, a refund showing as income, a transfer as a deduction, or a specific merchant you always want treated one way. Clearer rules give you more accurate Summary, Income, and Deductions views.
             </p>
             {rulesError && (
-              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
-                {rulesError}
+              <div className="mb-4 flex items-start justify-between rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                <span>{rulesError}</span>
+                <button type="button" onClick={() => setRulesError(null)} className="ml-2 shrink-0 text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300">✕</button>
               </div>
             )}
             {/* New rule: textarea + Add button. */}

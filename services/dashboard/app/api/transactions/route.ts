@@ -12,33 +12,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 
-/**
- * DELETE /api/transactions?id=<transaction_id>
- * Removes a single transaction by its transaction_id.
- * Cascades to income, deductions, and uncategorized via FK ON DELETE CASCADE.
- */
-export async function DELETE(request: NextRequest) {
-  const id = request.nextUrl.searchParams.get("id");
-  if (!id) {
-    return NextResponse.json({ error: "id query param required" }, { status: 400 });
-  }
-  try {
-    const pool = getPool();
-    const result = await pool.query(
-      "DELETE FROM transactions WHERE transaction_id = $1",
-      [id]
-    );
-    if (result.rowCount === 0) {
-      return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
-    }
-    return NextResponse.json({ ok: true });
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "Delete failed";
-    console.error("[transactions] Delete error:", message);
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
-}
-
 export async function GET(request: NextRequest) {
   try {
     const pool = getPool();
