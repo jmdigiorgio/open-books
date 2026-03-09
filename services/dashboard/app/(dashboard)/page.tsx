@@ -405,20 +405,6 @@ export default function DashboardPage() {
     }
   }, [incomeForm]);
 
-  const handleDeleteIncome = useCallback(async (id: number) => {
-    setIncomeError(null);
-    try {
-      const res = await fetch(`/api/income?id=${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error ?? "Failed to delete");
-      }
-      setIncomeRows((prev) => prev.filter((r) => r.id !== id));
-    } catch (e) {
-      setIncomeError(e instanceof Error ? e.message : "Failed to delete");
-    }
-  }, []);
-
   /* ---- Deductions CRUD ---- */
   const [deductionRows, setDeductionRows] = useState<LedgerRow[]>([]);
   const [deductionLoading, setDeductionLoading] = useState(false);
@@ -583,20 +569,6 @@ export default function DashboardPage() {
       setDeductionError(e instanceof Error ? e.message : "Failed to add deduction");
     }
   }, [deductionForm]);
-
-  const handleDeleteDeduction = useCallback(async (id: number) => {
-    setDeductionError(null);
-    try {
-      const res = await fetch(`/api/deductions?id=${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error ?? "Failed to delete");
-      }
-      setDeductionRows((prev) => prev.filter((r) => r.id !== id));
-    } catch (e) {
-      setDeductionError(e instanceof Error ? e.message : "Failed to delete");
-    }
-  }, []);
 
   /* ---- Rules (agent classification): one row per rule, CRUD ---- */
   const [rules, setRules] = useState<RuleRow[]>([]);
@@ -1196,7 +1168,6 @@ export default function DashboardPage() {
                       <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Description</th>
                       <th className="px-3 py-2 text-right font-medium text-zinc-600 dark:text-zinc-400">Amount</th>
                       <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Proof</th>
-                      <th className="w-16 px-3 py-2" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -1212,11 +1183,6 @@ export default function DashboardPage() {
                         </td>
                         <td className="max-w-0 truncate px-3 py-2 font-mono text-xs text-zinc-500 dark:text-zinc-400" title={row.proof}>
                           {row.proof || "—"}
-                        </td>
-                        <td className="px-3 py-2 text-center">
-                          <button type="button" onClick={() => handleDeleteDeduction(row.id)} className="rounded px-1.5 py-0.5 text-xs text-red-500 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950/30 dark:hover:text-red-300" title="Delete">
-                            ✕
-                          </button>
                         </td>
                       </tr>
                     ))}
@@ -1406,7 +1372,6 @@ export default function DashboardPage() {
                       <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Description</th>
                       <th className="px-3 py-2 text-right font-medium text-zinc-600 dark:text-zinc-400">Amount</th>
                       <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Proof</th>
-                      <th className="w-16 px-3 py-2" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -1422,11 +1387,6 @@ export default function DashboardPage() {
                         </td>
                         <td className="max-w-0 truncate px-3 py-2 font-mono text-xs text-zinc-500 dark:text-zinc-400" title={row.proof}>
                           {row.proof || "—"}
-                        </td>
-                        <td className="px-3 py-2 text-center">
-                          <button type="button" onClick={() => handleDeleteIncome(row.id)} className="rounded px-1.5 py-0.5 text-xs text-red-500 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950/30 dark:hover:text-red-300" title="Delete">
-                            ✕
-                          </button>
                         </td>
                       </tr>
                     ))}

@@ -1,9 +1,8 @@
 /**
  * /api/income – CRUD for the income table.
  *
- * GET    → list all income rows ordered by date descending.
- * POST   → create a new income row (body: { date, name, description, amount, proof }).
- * DELETE → delete by id (query param ?id=N).
+ * GET  → list all income rows ordered by date descending.
+ * POST → create a new income row (body: { date, name, description, amount, proof }).
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -46,25 +45,6 @@ export async function POST(request: NextRequest) {
   } catch (e) {
     const message = e instanceof Error ? e.message : "Failed to create income";
     console.error("[income] POST Error:", message);
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
-}
-
-export async function DELETE(request: NextRequest) {
-  const id = request.nextUrl.searchParams.get("id");
-  if (!id) {
-    return NextResponse.json({ error: "id query param required" }, { status: 400 });
-  }
-  try {
-    const pool = getPool();
-    const result = await pool.query("DELETE FROM income WHERE id = $1", [id]);
-    if (result.rowCount === 0) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-    return NextResponse.json({ ok: true });
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "Failed to delete income";
-    console.error("[income] DELETE Error:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
