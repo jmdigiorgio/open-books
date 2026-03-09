@@ -58,15 +58,6 @@ CREATE TABLE agent_rules (
 
 COMMENT ON TABLE agent_rules IS 'Per-rule rows for the classification agent; each rule is one row with CRUD.';
 
--- Single-row table storing the agent prompt (system/instruction text for the classification agent).
-CREATE TABLE agent_prompt (
-  id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-  content text NOT NULL DEFAULT '',
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-COMMENT ON TABLE agent_prompt IS 'Single row: agent prompt/instructions for classification.';
-
 -- Income: matches example table (Date received, Payer/source, Description, Amount, Proof).
 CREATE TABLE income (
   id serial PRIMARY KEY,

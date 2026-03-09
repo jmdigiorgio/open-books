@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { usePlaidLink } from "react-plaid-link";
 
-type TabId = "summary" | "deductions" | "income" | "mileage" | "transactions" | "rules" | "prompt";
+type TabId = "summary" | "deductions" | "uncategorized" | "income" | "mileage" | "transactions" | "rules";
 
 /** One rule row from GET /api/rules. */
 interface RuleRow {
@@ -39,6 +39,17 @@ interface LedgerRow {
   created_at: string;
 }
 
+/** Shape of an uncategorized row from GET /api/uncategorized. */
+interface UncategorizedRow {
+  id: number;
+  transaction_id: string;
+  date: string;
+  description: string | null;
+  amount: number;
+  reason: string;
+  created_at: string;
+}
+
 /** Format transaction date/time in the user's locale and timezone. Uses datetime when present, else date. */
 function formatTxnDate(date: string, datetime: string | null): string {
   if (datetime) {
@@ -61,10 +72,10 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "summary", label: "Summary" },
   { id: "income", label: "Income" },
   { id: "deductions", label: "Deductions" },
+  { id: "uncategorized", label: "Uncategorized" },
   { id: "mileage", label: "Mileage" },
   { id: "transactions", label: "Transactions" },
   { id: "rules", label: "Rules" },
-  { id: "prompt", label: "Prompt" },
 ];
 
 export default function DashboardPage() {
@@ -74,6 +85,14 @@ export default function DashboardPage() {
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [linkLoading, setLinkLoading] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
+
+  /** Classify modal: step 'choice' = Clear / Continue / Cancel; 'running' = agent run with progress. */
+  const [classifyModalOpen, setClassifyModalOpen] = useState(false);
+  const [classifyStep, setClassifyStep] = useState<"choice" | "running">("choice");
+  const [classifyRunning, setClassifyRunning] = useState(false);
+  const [classifyProgress, setClassifyProgress] = useState<{ current: number; total: number; description?: string | null } | null>(null);
+  const classifyAbortRef = useRef<AbortController | null>(null);
+  const classifyProgressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Load linked status and institution name on mount.
   useEffect(() => {
@@ -440,6 +459,112 @@ export default function DashboardPage() {
     if (tab === "deductions" || tab === "summary") fetchDeductions();
   }, [tab, fetchDeductions]);
 
+  const [uncategorizedRows, setUncategorizedRows] = useState<UncategorizedRow[]>([]);
+  const [uncategorizedLoading, setUncategorizedLoading] = useState(false);
+  const [uncategorizedError, setUncategorizedError] = useState<string | null>(null);
+  const [uncategorizedAdding, setUncategorizedAdding] = useState(false);
+  const [uncategorizedForm, setUncategorizedForm] = useState({
+    transaction_id: "",
+    date: "",
+    description: "",
+    amount: "",
+    reason: "",
+  });
+
+  const fetchUncategorized = useCallback(async () => {
+    setUncategorizedLoading(true);
+    setUncategorizedError(null);
+    try {
+      const res = await fetch("/api/uncategorized");
+      if (!res.ok) throw new Error("Failed to load uncategorized");
+      const data = await res.json();
+      setUncategorizedRows(data.rows ?? []);
+    } catch {
+      setUncategorizedError("Could not load uncategorized data");
+    } finally {
+      setUncategorizedLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "uncategorized") fetchUncategorized();
+  }, [tab, fetchUncategorized]);
+
+  /** Start the classification run (progress polling + POST /api/agent/run). Used after Continue or after Clear. */
+  const startClassifyRun = useCallback(() => {
+    setClassifyStep("running");
+    setClassifyRunning(true);
+    setClassifyProgress(null);
+    const controller = new AbortController();
+    classifyAbortRef.current = controller;
+    const progressInterval = setInterval(() => {
+      fetch("/api/agent/progress")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data && typeof data.current === "number" && typeof data.total === "number") {
+            setClassifyProgress({
+              current: data.current,
+              total: data.total,
+              description: data.description ?? null,
+            });
+          }
+        })
+        .catch(() => {});
+    }, 800);
+    classifyProgressIntervalRef.current = progressInterval;
+    fetch("/api/agent/run", { method: "POST", signal: controller.signal })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("Run failed"))))
+      .then(() => {
+        fetchIncome();
+        fetchDeductions();
+        fetchUncategorized();
+      })
+      .catch((err) => {
+        if (err?.name !== "AbortError") {
+          console.error("[classify]", err);
+        }
+      })
+      .finally(() => {
+        if (classifyProgressIntervalRef.current) {
+          clearInterval(classifyProgressIntervalRef.current);
+          classifyProgressIntervalRef.current = null;
+        }
+        setClassifyRunning(false);
+        setClassifyModalOpen(false);
+        setClassifyProgress(null);
+        setClassifyStep("choice");
+        classifyAbortRef.current = null;
+      });
+  }, [fetchIncome, fetchDeductions, fetchUncategorized]);
+
+  const handleAddUncategorized = useCallback(async () => {
+    if (!uncategorizedForm.transaction_id || !uncategorizedForm.date || !uncategorizedForm.amount) return;
+    setUncategorizedError(null);
+    try {
+      const res = await fetch("/api/uncategorized", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transaction_id: uncategorizedForm.transaction_id,
+          date: uncategorizedForm.date,
+          description: uncategorizedForm.description || null,
+          amount: parseFloat(uncategorizedForm.amount),
+          reason: uncategorizedForm.reason || "",
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? "Failed to add uncategorized");
+      }
+      const row = await res.json();
+      setUncategorizedRows((prev) => [row, ...prev]);
+      setUncategorizedForm({ transaction_id: "", date: "", description: "", amount: "", reason: "" });
+      setUncategorizedAdding(false);
+    } catch (e) {
+      setUncategorizedError(e instanceof Error ? e.message : "Failed to add uncategorized");
+    }
+  }, [uncategorizedForm]);
+
   const handleAddDeduction = useCallback(async () => {
     if (!deductionForm.date || !deductionForm.amount) return;
     setDeductionError(null);
@@ -598,70 +723,6 @@ export default function DashboardPage() {
     }
   }, [rulesDeletingId]);
 
-  /* ---- Prompt (single-row agent prompt) ---- */
-  const [promptContent, setPromptContent] = useState("");
-  const [promptLoading, setPromptLoading] = useState(false);
-  const [promptSaving, setPromptSaving] = useState(false);
-  const [promptError, setPromptError] = useState<string | null>(null);
-  const [promptUpdatedAt, setPromptUpdatedAt] = useState<string | null>(null);
-  const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
-
-  const fetchPrompt = useCallback(async () => {
-    setPromptLoading(true);
-    setPromptError(null);
-    try {
-      const res = await fetch("/api/prompt");
-      if (!res.ok) throw new Error("Failed to load prompt");
-      const data = await res.json();
-      setPromptContent(data.content ?? "");
-      setPromptUpdatedAt(data.updatedAt ?? null);
-    } catch {
-      setPromptError("Could not load prompt");
-    } finally {
-      setPromptLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (tab === "prompt") fetchPrompt();
-  }, [tab, fetchPrompt]);
-
-  /* Auto-expand prompt textarea after user stops typing (debounced). Save/restore window scroll so the "height = auto" measurement doesn't cause the page to jump to top on each keystroke. */
-  useEffect(() => {
-    if (tab !== "prompt" || promptLoading) return;
-    const t = setTimeout(() => {
-      const el = promptTextareaRef.current;
-      if (!el) return;
-      const scrollY = window.scrollY;
-      el.style.height = "auto";
-      el.style.height = `${Math.max(el.scrollHeight, 120)}px`;
-      requestAnimationFrame(() => window.scrollTo(0, scrollY));
-    }, 200);
-    return () => clearTimeout(t);
-  }, [promptContent, tab, promptLoading]);
-
-  const handlePromptSave = useCallback(async () => {
-    setPromptSaving(true);
-    setPromptError(null);
-    try {
-      const res = await fetch("/api/prompt", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: promptContent }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error ?? "Failed to save prompt");
-      }
-      const data = await res.json();
-      setPromptUpdatedAt(data.updatedAt ?? null);
-    } catch (e) {
-      setPromptError(e instanceof Error ? e.message : "Failed to save prompt");
-    } finally {
-      setPromptSaving(false);
-    }
-  }, [promptContent]);
-
   /**
    * From mileage table: total miles and mileage deduction for the selected year only.
    * Rows are filtered by the Summary year dropdown when a date column exists; the IRS rate used is for that same year.
@@ -705,6 +766,56 @@ export default function DashboardPage() {
       summaryTotalMiles: totalMiles,
       summaryMileageDeduction: Math.round(totalMiles * rate * 100) / 100,
     };
+  }, [mileageColumns, mileageRows, selectedYear]);
+
+  /** Years available for filtering: from income, deductions, uncategorized, mileage, and transactions. */
+  const ledgerYearOptions = useMemo(() => {
+    const fromIncome = incomeRows.map((r) => new Date(r.date).getFullYear());
+    const fromDeductions = deductionRows.map((r) => new Date(r.date).getFullYear());
+    const fromUncategorized = uncategorizedRows.map((r) => new Date(r.date).getFullYear());
+    const dateCol = mileageColumns.find((c) => c === "date" || c.includes("date"));
+    const fromMileage =
+      dateCol && mileageRows.length > 0
+        ? mileageRows
+            .map((r) => {
+              const d = new Date(String(r[dateCol] ?? ""));
+              return Number.isNaN(d.getTime()) ? null : d.getFullYear();
+            })
+            .filter((y): y is number => y != null)
+        : [];
+    const all = [
+      ...fromIncome,
+      ...fromDeductions,
+      ...fromUncategorized,
+      ...fromMileage,
+      ...availableYears,
+      new Date().getFullYear(),
+    ];
+    return [...new Set(all)].sort((a, b) => b - a);
+  }, [incomeRows, deductionRows, uncategorizedRows, mileageRows, mileageColumns, availableYears]);
+
+  /** Rows filtered by selected year for each ledger tab. */
+  const incomeRowsFiltered = useMemo(
+    () => incomeRows.filter((r) => new Date(r.date).getFullYear() === selectedYear),
+    [incomeRows, selectedYear]
+  );
+  const deductionRowsFiltered = useMemo(
+    () => deductionRows.filter((r) => new Date(r.date).getFullYear() === selectedYear),
+    [deductionRows, selectedYear]
+  );
+  const uncategorizedRowsFiltered = useMemo(
+    () => uncategorizedRows.filter((r) => new Date(r.date).getFullYear() === selectedYear),
+    [uncategorizedRows, selectedYear]
+  );
+  const mileageRowsFiltered = useMemo(() => {
+    const dateCol = mileageColumns.find((c) => c === "date" || c.includes("date"));
+    if (!dateCol || mileageRows.length === 0) return mileageRows;
+    return mileageRows.filter((row) => {
+      const raw = row[dateCol];
+      if (raw == null || raw === "") return false;
+      const d = new Date(String(raw));
+      return !Number.isNaN(d.getTime()) && d.getFullYear() === selectedYear;
+    });
   }, [mileageColumns, mileageRows, selectedYear]);
 
   /**
@@ -772,7 +883,7 @@ export default function DashboardPage() {
 
       {/* Tabs */}
       <nav
-        className="border-b border-zinc-200 bg-white px-4 dark:border-zinc-800 dark:bg-zinc-900"
+        className="flex items-center justify-between border-b border-zinc-200 bg-white px-4 dark:border-zinc-800 dark:bg-zinc-900"
         aria-label="Dashboard sections"
       >
         <ul className="flex gap-1">
@@ -792,7 +903,103 @@ export default function DashboardPage() {
             </li>
           ))}
         </ul>
+        <button
+          type="button"
+          onClick={() => {
+            setClassifyModalOpen(true);
+            setClassifyStep("choice");
+            setClassifyProgress(null);
+          }}
+          disabled={classifyRunning}
+          className="ml-auto flex items-center gap-1.5 rounded px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+          aria-label="Run classifier"
+          title="Run classifier"
+        >
+          <span aria-hidden className="text-base leading-none">
+            ✦
+          </span>
+          Classify
+        </button>
       </nav>
+
+      {/* Classify modal: step 1 = Clear / Continue / Cancel; step 2 = running with progress. */}
+      {classifyModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          aria-modal="true"
+          role="dialog"
+          aria-labelledby="classify-modal-title"
+        >
+          <div className="mx-4 w-full max-w-sm rounded-lg border border-zinc-200 bg-white p-6 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+            {classifyStep === "choice" ? (
+              <>
+                <h2 id="classify-modal-title" className="mb-4 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+                  How do you want to classify?
+                </h2>
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      fetch("/api/agent/clear", { method: "POST" })
+                        .then((r) => (r.ok ? undefined : Promise.reject(new Error("Clear failed"))))
+                        .then(() => startClassifyRun())
+                        .catch((err) => {
+                          console.error("[classify] clear", err);
+                          setClassifyModalOpen(false);
+                        });
+                    }}
+                    className="rounded bg-amber-600 px-3 py-2 text-sm font-medium text-white hover:bg-amber-500"
+                  >
+                    Clear tables and start from beginning
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => startClassifyRun()}
+                    className="rounded bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                  >
+                    Continue
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setClassifyModalOpen(false)}
+                    className="rounded bg-zinc-200 px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-600"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p id="classify-modal-title" className="mb-2 text-zinc-700 dark:text-zinc-300">
+                  {classifyProgress && classifyProgress.total > 0
+                    ? `Classifying item ${classifyProgress.current} of ${classifyProgress.total}`
+                    : "Agent is classifying expenses…"}
+                </p>
+                {classifyProgress?.description ? (
+                  <p className="mb-4 truncate text-sm text-zinc-500 dark:text-zinc-400" title={classifyProgress.description}>
+                    {classifyProgress.description}
+                  </p>
+                ) : classifyProgress && classifyProgress.total > 0 ? (
+                  <div className="mb-4" />
+                ) : null}
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      fetch("/api/agent/cancel", { method: "POST" }).catch(() => {});
+                      classifyAbortRef.current?.abort();
+                    }}
+                    disabled={!classifyRunning}
+                    className="rounded bg-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-800 hover:bg-zinc-300 disabled:opacity-50 dark:bg-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-600"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       <main className="mx-auto max-w-4xl px-4 py-8">
         {tab === "summary" && (
@@ -903,10 +1110,24 @@ export default function DashboardPage() {
         )}
         {tab === "deductions" && (
           <section aria-label="Deductions">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-                Deductions
-              </h2>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+                  Deductions
+                </h2>
+                <select
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(parseInt(e.target.value, 10))}
+                  className="rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-700 outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                  aria-label="Filter by year"
+                >
+                  {ledgerYearOptions.map((yr) => (
+                    <option key={yr} value={yr}>
+                      {yr}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <button
                 type="button"
                 onClick={() => setDeductionAdding((v) => !v)}
@@ -952,8 +1173,8 @@ export default function DashboardPage() {
 
             {deductionLoading ? (
               <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
-            ) : deductionRows.length === 0 ? (
-              <p className="text-sm text-zinc-500 dark:text-zinc-400">No deductions yet.</p>
+            ) : deductionRowsFiltered.length === 0 ? (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">No deductions for this year.</p>
             ) : (
               <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
                 <table className="w-full text-left text-sm">
@@ -968,7 +1189,7 @@ export default function DashboardPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                    {deductionRows.map((row) => (
+                    {deductionRowsFiltered.map((row) => (
                       <tr key={row.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
                         <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
                           {new Date(row.date).toLocaleDateString()}
@@ -994,12 +1215,127 @@ export default function DashboardPage() {
             )}
           </section>
         )}
+        {tab === "uncategorized" && (
+          <section aria-label="Uncategorized">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+                  Uncategorized
+                </h2>
+                <select
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(parseInt(e.target.value, 10))}
+                  className="rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-700 outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                  aria-label="Filter by year"
+                >
+                  {ledgerYearOptions.map((yr) => (
+                    <option key={yr} value={yr}>
+                      {yr}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUncategorizedAdding((v) => !v)}
+                className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              >
+                {uncategorizedAdding ? "Cancel" : "Add"}
+              </button>
+            </div>
+            <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">
+              Transactions the classification agent could not classify as income or deduction. Run the agent to populate, or add manually.
+            </p>
+            {uncategorizedError && (
+              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                {uncategorizedError}
+              </div>
+            )}
+            {uncategorizedAdding && (
+              <div className="mb-4 flex flex-wrap items-end gap-2 rounded border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Transaction ID
+                  <input type="text" placeholder="e.g. txn_abc123" value={uncategorizedForm.transaction_id} onChange={(e) => setUncategorizedForm((f) => ({ ...f, transaction_id: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Date
+                  <input type="date" value={uncategorizedForm.date} onChange={(e) => setUncategorizedForm((f) => ({ ...f, date: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Description
+                  <input type="text" placeholder="Transaction description" value={uncategorizedForm.description} onChange={(e) => setUncategorizedForm((f) => ({ ...f, description: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Amount
+                  <input type="number" step="0.01" placeholder="0.00" value={uncategorizedForm.amount} onChange={(e) => setUncategorizedForm((f) => ({ ...f, amount: e.target.value }))} className="w-28 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Reason
+                  <input type="text" placeholder="Why uncategorized" value={uncategorizedForm.reason} onChange={(e) => setUncategorizedForm((f) => ({ ...f, reason: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <button type="button" onClick={handleAddUncategorized} className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500">
+                  Save
+                </button>
+              </div>
+            )}
+            {uncategorizedLoading ? (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
+            ) : uncategorizedRowsFiltered.length === 0 ? (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">No uncategorized transactions for this year.</p>
+            ) : (
+              <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
+                <table className="w-full text-left text-sm">
+                  <thead className="border-b border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900">
+                    <tr>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Date</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Transaction ID</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Description</th>
+                      <th className="px-3 py-2 text-right font-medium text-zinc-600 dark:text-zinc-400">Amount</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                    {uncategorizedRowsFiltered.map((row) => (
+                      <tr key={row.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
+                        <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
+                          {new Date(row.date).toLocaleDateString()}
+                        </td>
+                        <td className="max-w-0 truncate px-3 py-2 font-mono text-xs text-zinc-500 dark:text-zinc-400" title={row.transaction_id}>
+                          {row.transaction_id || "—"}
+                        </td>
+                        <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{row.description ?? "—"}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">
+                          ${Number(row.amount).toFixed(2)}
+                        </td>
+                        <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{row.reason || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )}
         {tab === "income" && (
           <section aria-label="Income">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-                Income
-              </h2>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+                  Income
+                </h2>
+                <select
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(parseInt(e.target.value, 10))}
+                  className="rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-700 outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                  aria-label="Filter by year"
+                >
+                  {ledgerYearOptions.map((yr) => (
+                    <option key={yr} value={yr}>
+                      {yr}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <button
                 type="button"
                 onClick={() => setIncomeAdding((v) => !v)}
@@ -1045,8 +1381,8 @@ export default function DashboardPage() {
 
             {incomeLoading ? (
               <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
-            ) : incomeRows.length === 0 ? (
-              <p className="text-sm text-zinc-500 dark:text-zinc-400">No income records yet.</p>
+            ) : incomeRowsFiltered.length === 0 ? (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">No income records for this year.</p>
             ) : (
               <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
                 <table className="w-full text-left text-sm">
@@ -1061,7 +1397,7 @@ export default function DashboardPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                    {incomeRows.map((row) => (
+                    {incomeRowsFiltered.map((row) => (
                       <tr key={row.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
                         <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
                           {new Date(row.date).toLocaleDateString()}
@@ -1089,9 +1425,23 @@ export default function DashboardPage() {
         )}
         {tab === "mileage" && (
           <section aria-label="Mileage">
-            <h2 className="mb-4 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-              Mileage
-            </h2>
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+                Mileage
+              </h2>
+              <select
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(parseInt(e.target.value, 10))}
+                className="rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-700 outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                aria-label="Filter by year"
+              >
+                {ledgerYearOptions.map((yr) => (
+                  <option key={yr} value={yr}>
+                    {yr}
+                  </option>
+                ))}
+              </select>
+            </div>
             <p className="mb-4 text-zinc-600 dark:text-zinc-400">
               Upload a CSV to create or replace the mileage table. The table structure matches your
               CSV headers. If the table already exists, the CSV must have the same columns in the
@@ -1131,6 +1481,8 @@ export default function DashboardPage() {
               <p className="text-sm text-zinc-500 dark:text-zinc-400">
                 No mileage data yet. Upload a CSV to create the table.
               </p>
+            ) : mileageRowsFiltered.length === 0 ? (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">No mileage for this year.</p>
             ) : (
               <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
                 <table className="w-full text-left text-sm">
@@ -1147,7 +1499,7 @@ export default function DashboardPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                    {mileageRows.map((row, i) => (
+                    {mileageRowsFiltered.map((row, i) => (
                       <tr key={i} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
                         {mileageColumns.map((col) => (
                           <td
@@ -1463,65 +1815,6 @@ export default function DashboardPage() {
                         </tr>
                       ))
                     )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        )}
-        {tab === "prompt" && (
-          <section aria-label="Prompt">
-            <h2 className="mb-4 text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-              Prompt
-            </h2>
-            <p className="mb-4 text-zinc-600 dark:text-zinc-400">
-              System prompt for the classification agent. This is the main instruction text the agent sees (e.g. how to treat income vs deductions). Edit below and save.
-            </p>
-            {promptError && (
-              <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
-                {promptError}
-              </div>
-            )}
-            <div className="mb-4 flex flex-wrap items-center gap-3">
-              {promptUpdatedAt && (
-                <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Last saved {new Date(promptUpdatedAt).toLocaleString()}
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={handlePromptSave}
-                disabled={promptSaving}
-                className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
-              >
-                {promptSaving ? "Saving…" : "Save"}
-              </button>
-            </div>
-            {promptLoading ? (
-              <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
-            ) : (
-              <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
-                <table className="w-full min-w-[400px] border-collapse text-left text-sm">
-                  <thead className="border-b border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900">
-                    <tr>
-                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">
-                        Prompt
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                    <tr className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
-                      <td className="px-3 py-2">
-                        <textarea
-                          ref={promptTextareaRef}
-                          value={promptContent}
-                          onChange={(e) => setPromptContent(e.target.value)}
-                          placeholder="e.g. You are a classifier. Treat refunds as deductions, salary as income…"
-                          rows={4}
-                          className="min-h-[120px] min-w-0 w-full resize-none overflow-hidden rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-                        />
-                      </td>
-                    </tr>
                   </tbody>
                 </table>
               </div>

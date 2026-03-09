@@ -125,15 +125,11 @@ open-books/
 
 See [`db/01-init.sql`](db/01-init.sql) for the full schema.
 
-## Classification agent (prepared, not wired)
+## Classification agent
 
-The app is set up for an external agent (or cron job) that:
+The classification agent runs as a separate service (see `services/agent`). It is triggered **manually only** from the dashboard via the **Classify** button (✦ Classify) in the tab bar. No cron or scheduled runs. The agent reads the system prompt from `services/agent/prompt.md`, rules from `agent_rules` in the DB, and classifies unclassified transactions into `income`, `deductions`, or `uncategorized`.
 
-1. Reads the system prompt from `agent_prompt` and rules from `agent_rules`.
-2. Considers only transactions whose `transaction_id` is not already in `income.proof` or `deductions.proof`.
-3. For each unexamined transaction, classifies as income or deduction and inserts one row into `income` or `deductions` with `proof` = that transaction’s `transaction_id`, copying amount, date, name (and optionally description).
-
-Transaction sync from Plaid can be done separately (e.g. cron calling `/api/plaid/sync`) so the agent doesn’t spend tokens on syncing.
+Transaction sync from Plaid is separate (manual Sync or your own trigger) so the agent doesn’t spend tokens on syncing.
 
 ## Scripts
 

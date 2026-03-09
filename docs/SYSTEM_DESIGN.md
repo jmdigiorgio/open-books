@@ -28,7 +28,7 @@ Solo business owners manually track income, deductions, and mileage across sprea
 
 | Area | Notes |
 |------|--------|
-| AI/agent execution | Prompt and rules are stored; an external agent or cron can read them and write to income/deductions. |
+| AI/agent execution | Agent runs as separate service; triggered manually from dashboard Classify button; writes to income/deductions/uncategorized. |
 | Mileage API integration | MileIQ / TripLog; currently CSV upload. |
 | Reports and export | CSV/PDF for tax filing. |
 | Multi-user accounts | Single shared password for now. |

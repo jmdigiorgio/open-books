@@ -125,9 +125,9 @@ The agent can be implemented as a Cursor/IDE agent (MCP or API + DB) or as a bac
 
 The classification agent runs as **its own Railway service**, separate from the Next.js dashboard.
 
-- **Why separate**: The agent uses an LLM (OpenRouter), optional web search, and longer-running per-transaction work. Running it as its own service keeps the dashboard responsive, isolates failures, and allows independent scaling and scheduling (e.g. cron or queue-driven runs).
-- **Shared DB**: The agent connects to the same Postgres database as the dashboard (e.g. same `DATABASE_URL`). It reads `transactions`, `agent_prompt`, `agent_rules` and writes to `income`, `deductions`, and `uncategorized`. No direct HTTP calls between dashboard and agent are required; coordination is via the database.
-- **Trigger**: The agent can be triggered by a Railway cron job, an external scheduler hitting an HTTP endpoint, or a manual run. How it is triggered is left to the implementation.
+- **Why separate**: The agent uses an LLM (OpenRouter), optional web search, and longer-running per-transaction work. Running it as its own service keeps the dashboard responsive and isolates failures.
+- **Shared DB**: The agent connects to the same Postgres database as the dashboard (e.g. same `DATABASE_URL`). It reads `transactions`, `agent_rules` and writes to `income`, `deductions`, and `uncategorized`. No direct HTTP calls between dashboard and agent are required; coordination is via the database.
+- **Trigger**: Manual only. The user runs the agent from the dashboard via the **Classify** button. No cron or scheduled runs.
 - **Secrets**: The Railway service needs at least `DATABASE_URL` and OpenRouter (or other LLM) API keys; web search may require additional keys depending on the provider.
 
 ---
@@ -170,5 +170,5 @@ The agent instructions come from `agent_prompt.content` in the database. Edit th
 | **New table** | `uncategorized` (id, transaction_id, date, description, amount, reason, created_at). |
 | **Description** | Use COALESCE(merchant_name, name, original_description) from transactions. |
 | **Flow** | Load prompt + rules → for each unclassified txn: classify (with web search if unsure) → insert into income, deductions, or uncategorized. |
-| **Deployment** | Agent runs as its own Railway service; shared Postgres with dashboard; trigger via cron, HTTP, or manual. |
+| **Deployment** | Agent runs as its own service; shared Postgres with dashboard; trigger manual only (dashboard Classify button). |
 | **Idempotency** | Only insert for currently unclassified transactions; UNIQUE constraints prevent double inserts. |

@@ -1,24 +1,21 @@
-# OpenBooks compose stack: Postgres + schema (transactions table).
-# Run: docker compose up -d
-# Stop: docker compose down
+# OpenBooks compose stack: agent only.
+# Dashboard: run locally with npm run dev.
+# Database: use deployed DB (set DATABASE_URL in .env).
+#
+# Run:   docker compose up -d
+# Stop:  docker compose down
+# Logs:  docker compose logs -f agent
 
 name: open-books
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: open-books-postgres
+  agent:
+    build:
+      context: ./services/agent
+      dockerfile: Dockerfile
+    container_name: open-books-agent
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: openbooks
-      POSTGRES_PASSWORD: openbooks
-      POSTGRES_DB: openbooks
     ports:
-      - "5432:5432"
-    volumes:
-      - openbooks_pgdata:/var/lib/postgresql/data
-      # Init script runs on first start (empty data dir); creates transactions table
-      - ./db:/docker-entrypoint-initdb.d
-
-volumes:
-  openbooks_pgdata:
+      - "3001:3001"
+    env_file:
+      - services/agent/.env.local
