@@ -28,14 +28,14 @@ export async function readIncome(args: { limit?: number }): Promise<string> {
 }
 
 /**
- * Read recent deduction rows.
+ * Read recent expense rows.
  * Returns JSON array of { id, date, name, description, amount, proof }.
  */
-export async function readDeductions(args: { limit?: number }): Promise<string> {
+export async function readExpenses(args: { limit?: number }): Promise<string> {
   const limit = clampLimit(args.limit);
   const pool = getPool();
   const { rows } = await pool.query(
-    "SELECT id, date, name, description, amount, proof FROM deductions ORDER BY date DESC LIMIT $1",
+    "SELECT id, date, name, description, amount, proof FROM expenses ORDER BY date DESC LIMIT $1",
     [limit]
   );
   return JSON.stringify(rows);

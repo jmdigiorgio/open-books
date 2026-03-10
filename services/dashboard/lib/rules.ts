@@ -1,6 +1,6 @@
 /**
  * Agent rules: one row per rule in agent_rules. CRUD for rules the agent reads when
- * classifying transactions as income vs deductions.
+ * classifying transactions as income vs expenses.
  */
 
 import { getPool } from "@/lib/db";

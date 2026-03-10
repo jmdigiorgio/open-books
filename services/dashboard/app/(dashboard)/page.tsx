@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { usePlaidLink } from "react-plaid-link";
 
-type TabId = "summary" | "deductions" | "uncategorized" | "income" | "mileage" | "transactions" | "rules";
+type TabId = "summary" | "expenses" | "deductions" | "uncategorized" | "income" | "mileage" | "transactions" | "rules";
 
 /** One rule row from GET /api/rules. */
 interface RuleRow {
@@ -28,7 +28,7 @@ interface Transaction {
   payment_channel: string | null;
 }
 
-/** Shape of an income or deduction row returned by GET /api/income or /api/deductions. */
+/** Shape of an income or expense row returned by GET /api/income or /api/expenses. */
 interface LedgerRow {
   id: number;
   date: string;
@@ -71,6 +71,7 @@ interface TransactionsResponse {
 const TABS: { id: TabId; label: string }[] = [
   { id: "summary", label: "Summary" },
   { id: "income", label: "Income" },
+  { id: "expenses", label: "Expenses" },
   { id: "deductions", label: "Deductions" },
   { id: "uncategorized", label: "Uncategorized" },
   { id: "mileage", label: "Mileage" },
@@ -405,31 +406,31 @@ export default function DashboardPage() {
     }
   }, [incomeForm]);
 
-  /* ---- Deductions CRUD ---- */
-  const [deductionRows, setDeductionRows] = useState<LedgerRow[]>([]);
-  const [deductionLoading, setDeductionLoading] = useState(false);
-  const [deductionError, setDeductionError] = useState<string | null>(null);
-  const [deductionAdding, setDeductionAdding] = useState(false);
-  const [deductionForm, setDeductionForm] = useState({ date: "", name: "", description: "", amount: "", proof: "" });
+  /* ---- Expenses CRUD ---- */
+  const [expenseRows, setExpenseRows] = useState<LedgerRow[]>([]);
+  const [expenseLoading, setExpenseLoading] = useState(false);
+  const [expenseError, setExpenseError] = useState<string | null>(null);
+  const [expenseAdding, setExpenseAdding] = useState(false);
+  const [expenseForm, setExpenseForm] = useState({ date: "", name: "", description: "", amount: "", proof: "" });
 
-  const fetchDeductions = useCallback(async () => {
-    setDeductionLoading(true);
-    setDeductionError(null);
+  const fetchExpenses = useCallback(async () => {
+    setExpenseLoading(true);
+    setExpenseError(null);
     try {
-      const res = await fetch("/api/deductions");
-      if (!res.ok) throw new Error("Failed to load deductions");
+      const res = await fetch("/api/expenses");
+      if (!res.ok) throw new Error("Failed to load expenses");
       const data = await res.json();
-      setDeductionRows(data.rows ?? []);
+      setExpenseRows(data.rows ?? []);
     } catch {
-      setDeductionError("Could not load deductions data");
+      setExpenseError("Could not load expenses data");
     } finally {
-      setDeductionLoading(false);
+      setExpenseLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (tab === "deductions" || tab === "summary") fetchDeductions();
-  }, [tab, fetchDeductions]);
+    if (tab === "expenses" || tab === "summary") fetchExpenses();
+  }, [tab, fetchExpenses]);
 
   const [uncategorizedRows, setUncategorizedRows] = useState<UncategorizedRow[]>([]);
   const [uncategorizedLoading, setUncategorizedLoading] = useState(false);
@@ -493,7 +494,7 @@ export default function DashboardPage() {
         }
         await res.json().catch(() => ({}));
         fetchIncome();
-        fetchDeductions();
+        fetchExpenses();
         fetchUncategorized();
       })
       .catch((err) => {
@@ -512,7 +513,7 @@ export default function DashboardPage() {
         setClassifyStep("choice");
         classifyAbortRef.current = null;
       });
-  }, [fetchIncome, fetchDeductions, fetchUncategorized]);
+  }, [fetchIncome, fetchExpenses, fetchUncategorized]);
 
   const handleAddUncategorized = useCallback(async () => {
     if (!uncategorizedForm.transaction_id || !uncategorizedForm.date || !uncategorizedForm.amount) return;
@@ -542,33 +543,109 @@ export default function DashboardPage() {
     }
   }, [uncategorizedForm]);
 
-  const handleAddDeduction = useCallback(async () => {
-    if (!deductionForm.date || !deductionForm.amount) return;
+  const handleAddExpense = useCallback(async () => {
+    if (!expenseForm.date || !expenseForm.amount) return;
+    setExpenseError(null);
+    try {
+      const res = await fetch("/api/expenses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date: expenseForm.date,
+          name: expenseForm.name || null,
+          description: expenseForm.description || null,
+          amount: parseFloat(expenseForm.amount),
+          proof: expenseForm.proof || "",
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? "Failed to add expense");
+      }
+      const row = await res.json();
+      setExpenseRows((prev) => [row, ...prev]);
+      setExpenseForm({ date: "", name: "", description: "", amount: "", proof: "" });
+      setExpenseAdding(false);
+    } catch (e) {
+      setExpenseError(e instanceof Error ? e.message : "Failed to add expense");
+    }
+  }, [expenseForm]);
+
+  /* ---- Deductions (category monthly amount + percentage, monthly deduction = monthly_amount × %) ---- */
+  interface DeductionCategoryForm {
+    category: string;
+    label: string;
+    monthlyAmount: number;
+    percentage: number;
+  }
+  const [deductionCategories, setDeductionCategories] = useState<DeductionCategoryForm[]>([]);
+  const [deductionLoading, setDeductionLoading] = useState(false);
+  const [deductionError, setDeductionError] = useState<string | null>(null);
+  const [deductionSaving, setDeductionSaving] = useState(false);
+
+  const fetchDeductions = useCallback(async (year: number) => {
+    setDeductionLoading(true);
     setDeductionError(null);
+    try {
+      const res = await fetch(`/api/deductions?year=${year}`);
+      if (!res.ok) throw new Error("Failed to load deductions");
+      const data = await res.json();
+      setDeductionCategories(
+        Array.isArray(data.categories)
+          ? data.categories.map((c: { category: string; label: string; monthly_amount?: number; total?: number; percentage: number }) => ({
+              category: c.category,
+              label: c.label,
+              monthlyAmount: Number(c.monthly_amount ?? c.total ?? 0),
+              percentage: Number((c.percentage ?? 0) * 100),
+            }))
+          : []
+      );
+    } catch {
+      setDeductionError("Could not load deductions");
+    } finally {
+      setDeductionLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "deductions" || tab === "summary") fetchDeductions(selectedYear);
+  }, [tab, selectedYear, fetchDeductions]);
+
+  const setDeductionCategory = useCallback((index: number, field: "monthlyAmount" | "percentage", value: number) => {
+    setDeductionCategories((prev) => {
+      const next = [...prev];
+      if (next[index]) next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  }, []);
+
+  const handleClearDeductions = useCallback(() => {
+    setDeductionCategories((prev) => prev.map((c) => ({ ...c, monthlyAmount: 0, percentage: 0 })));
+    setDeductionError(null);
+  }, []);
+
+  const handleSaveDeductions = useCallback(async () => {
+    setDeductionError(null);
+    setDeductionSaving(true);
     try {
       const res = await fetch("/api/deductions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          date: deductionForm.date,
-          name: deductionForm.name || null,
-          description: deductionForm.description || null,
-          amount: parseFloat(deductionForm.amount),
-          proof: deductionForm.proof || "",
+          year: selectedYear,
+          categories: deductionCategories.map((c) => ({ category: c.category, monthly_amount: c.monthlyAmount, percentage: c.percentage / 100 })),
         }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
-        throw new Error(data?.error ?? "Failed to add deduction");
+        throw new Error(data?.error ?? "Failed to save deductions");
       }
-      const row = await res.json();
-      setDeductionRows((prev) => [row, ...prev]);
-      setDeductionForm({ date: "", name: "", description: "", amount: "", proof: "" });
-      setDeductionAdding(false);
     } catch (e) {
-      setDeductionError(e instanceof Error ? e.message : "Failed to add deduction");
+      setDeductionError(e instanceof Error ? e.message : "Failed to save deductions");
+    } finally {
+      setDeductionSaving(false);
     }
-  }, [deductionForm]);
+  }, [selectedYear, deductionCategories]);
 
   /* ---- Rules (agent classification): one row per rule, CRUD ---- */
   const [rules, setRules] = useState<RuleRow[]>([]);
@@ -731,10 +808,31 @@ export default function DashboardPage() {
     };
   }, [mileageColumns, mileageRows, selectedYear]);
 
-  /** Years available for filtering: from income, deductions, uncategorized, mileage, and transactions. */
+  /**
+   * Category deductions (Deductions tab) year-to-date for the selected year.
+   * Monthly deduction per category = monthlyAmount × (percentage/100). Multiplied by months passed in that year (1–12 for past years, 1–current month for current year, 0 for future).
+   */
+  const { summaryCategoryDeductions, summaryDeductionsMonthsPassed } = useMemo(() => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1;
+    const monthsPassed =
+      selectedYear < currentYear ? 12 : selectedYear === currentYear ? currentMonth : 0;
+    let sum = 0;
+    for (const row of deductionCategories) {
+      const monthlyDeduction = (row.monthlyAmount * row.percentage) / 100;
+      sum += monthlyDeduction * monthsPassed;
+    }
+    return {
+      summaryCategoryDeductions: Math.round(sum * 100) / 100,
+      summaryDeductionsMonthsPassed: monthsPassed,
+    };
+  }, [deductionCategories, selectedYear]);
+
+  /** Years available for filtering: from income, expenses, uncategorized, mileage, and transactions. */
   const ledgerYearOptions = useMemo(() => {
     const fromIncome = incomeRows.map((r) => new Date(r.date).getFullYear());
-    const fromDeductions = deductionRows.map((r) => new Date(r.date).getFullYear());
+    const fromExpenses = expenseRows.map((r) => new Date(r.date).getFullYear());
     const fromUncategorized = uncategorizedRows.map((r) => new Date(r.date).getFullYear());
     const dateCol = mileageColumns.find((c) => c === "date" || c.includes("date"));
     const fromMileage =
@@ -748,23 +846,23 @@ export default function DashboardPage() {
         : [];
     const all = [
       ...fromIncome,
-      ...fromDeductions,
+      ...fromExpenses,
       ...fromUncategorized,
       ...fromMileage,
       ...availableYears,
       new Date().getFullYear(),
     ];
     return [...new Set(all)].sort((a, b) => b - a);
-  }, [incomeRows, deductionRows, uncategorizedRows, mileageRows, mileageColumns, availableYears]);
+  }, [incomeRows, expenseRows, uncategorizedRows, mileageRows, mileageColumns, availableYears]);
 
   /** Rows filtered by selected year for each ledger tab. */
   const incomeRowsFiltered = useMemo(
     () => incomeRows.filter((r) => new Date(r.date).getFullYear() === selectedYear),
     [incomeRows, selectedYear]
   );
-  const deductionRowsFiltered = useMemo(
-    () => deductionRows.filter((r) => new Date(r.date).getFullYear() === selectedYear),
-    [deductionRows, selectedYear]
+  const expenseRowsFiltered = useMemo(
+    () => expenseRows.filter((r) => new Date(r.date).getFullYear() === selectedYear),
+    [expenseRows, selectedYear]
   );
   const uncategorizedRowsFiltered = useMemo(
     () => uncategorizedRows.filter((r) => new Date(r.date).getFullYear() === selectedYear),
@@ -781,24 +879,24 @@ export default function DashboardPage() {
     });
   }, [mileageColumns, mileageRows, selectedYear]);
 
-  /** Summary totals for the selected year: income, business deductions, total deductions, taxable income. */
+  /** Summary totals for the selected year: income, business expenses, category deductions, total expenses, taxable income. */
   const {
     summaryGrossIncome,
-    summaryBusinessDeductions,
-    summaryTotalDeductions,
+    summaryBusinessExpenses,
+    summaryTotalExpenses,
     summaryTaxableIncome,
   } = useMemo(() => {
     const gross = incomeRowsFiltered.reduce((sum, r) => sum + Number(r.amount), 0);
-    const business = deductionRowsFiltered.reduce((sum, r) => sum + Number(r.amount), 0);
-    const totalDeductions = business + summaryMileageDeduction;
-    const taxable = gross - totalDeductions;
+    const business = expenseRowsFiltered.reduce((sum, r) => sum + Number(r.amount), 0);
+    const totalExpenses = business + summaryMileageDeduction + summaryCategoryDeductions;
+    const taxable = gross - totalExpenses;
     return {
       summaryGrossIncome: Math.round(gross * 100) / 100,
-      summaryBusinessDeductions: Math.round(business * 100) / 100,
-      summaryTotalDeductions: Math.round(totalDeductions * 100) / 100,
+      summaryBusinessExpenses: Math.round(business * 100) / 100,
+      summaryTotalExpenses: Math.round(totalExpenses * 100) / 100,
       summaryTaxableIncome: Math.round(taxable * 100) / 100,
     };
-  }, [incomeRowsFiltered, deductionRowsFiltered, summaryMileageDeduction]);
+  }, [incomeRowsFiltered, expenseRowsFiltered, summaryMileageDeduction, summaryCategoryDeductions]);
 
   /**
    * Format an amount for display. Plaid amounts are positive for debits
@@ -1035,15 +1133,15 @@ export default function DashboardPage() {
               </div>
               <div>
                 <p className="mb-2 text-sm font-medium text-zinc-500 dark:text-zinc-400">
-                  Income &amp; Deductions
+                  Income &amp; Expenses
                 </p>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
                     <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                      Business deductions
+                      Business expenses
                     </p>
                     <p className="mt-1 text-2xl font-semibold text-red-600 dark:text-red-400">
-                      ${summaryBusinessDeductions.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      ${summaryBusinessExpenses.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                   </div>
                   <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
@@ -1056,10 +1154,21 @@ export default function DashboardPage() {
                   </div>
                   <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
                     <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                      Total deductions
+                      Other deductions
+                    </p>
+                    <p className="mt-1 text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
+                      ${summaryCategoryDeductions.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                    <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                      {summaryDeductionsMonthsPassed} month{summaryDeductionsMonthsPassed !== 1 ? "s" : ""} YTD
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+                    <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Total expenses
                     </p>
                     <p className="mt-1 text-2xl font-semibold text-red-600 dark:text-red-400">
-                      ${summaryTotalDeductions.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      ${summaryTotalExpenses.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                   </div>
                 </div>
@@ -1090,6 +1199,108 @@ export default function DashboardPage() {
             </div>
           </section>
         )}
+        {tab === "expenses" && (
+          <section aria-label="Expenses">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+                  Expenses
+                </h2>
+                <select
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(parseInt(e.target.value, 10))}
+                  className="rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-700 outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                  aria-label="Filter by year"
+                >
+                  {ledgerYearOptions.map((yr) => (
+                    <option key={yr} value={yr}>
+                      {yr}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExpenseAdding((v) => !v)}
+                className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              >
+                {expenseAdding ? "Cancel" : "Add"}
+              </button>
+            </div>
+
+            {expenseError && (
+              <div className="mb-4 flex items-start justify-between rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+                <span>{expenseError}</span>
+                <button type="button" onClick={() => setExpenseError(null)} className="ml-2 shrink-0 text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300">✕</button>
+              </div>
+            )}
+
+            {expenseAdding && (
+              <div className="mb-4 flex flex-wrap items-end gap-2 rounded border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Date
+                  <input type="date" value={expenseForm.date} onChange={(e) => setExpenseForm((f) => ({ ...f, date: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Payee
+                  <input type="text" placeholder="Who was paid" value={expenseForm.name} onChange={(e) => setExpenseForm((f) => ({ ...f, name: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Description
+                  <input type="text" placeholder="What was purchased" value={expenseForm.description} onChange={(e) => setExpenseForm((f) => ({ ...f, description: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Amount
+                  <input type="number" step="0.01" placeholder="0.00" value={expenseForm.amount} onChange={(e) => setExpenseForm((f) => ({ ...f, amount: e.target.value }))} className="w-28 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                  Proof
+                  <input type="text" placeholder="Receipt, txn ID, etc." value={expenseForm.proof} onChange={(e) => setExpenseForm((f) => ({ ...f, proof: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
+                </label>
+                <button type="button" onClick={handleAddExpense} className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500">
+                  Save
+                </button>
+              </div>
+            )}
+
+            {expenseLoading ? (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
+            ) : expenseRowsFiltered.length === 0 ? (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">No expenses for this year.</p>
+            ) : (
+              <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
+                <table className="w-full text-left text-sm">
+                  <thead className="border-b border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900">
+                    <tr>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Date</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Payee</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Description</th>
+                      <th className="px-3 py-2 text-right font-medium text-zinc-600 dark:text-zinc-400">Amount</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Proof</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                    {expenseRowsFiltered.map((row) => (
+                      <tr key={row.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
+                        <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
+                          {new Date(row.date).toLocaleDateString()}
+                        </td>
+                        <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">{row.name ?? "—"}</td>
+                        <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{row.description ?? "—"}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">
+                          ${Number(row.amount).toFixed(2)}
+                        </td>
+                        <td className="max-w-0 truncate px-3 py-2 font-mono text-xs text-zinc-500 dark:text-zinc-400" title={row.proof}>
+                          {row.proof || "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )}
         {tab === "deductions" && (
           <section aria-label="Deductions">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -1110,13 +1321,24 @@ export default function DashboardPage() {
                   ))}
                 </select>
               </div>
-              <button
-                type="button"
-                onClick={() => setDeductionAdding((v) => !v)}
-                className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
-              >
-                {deductionAdding ? "Cancel" : "Add"}
-              </button>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleClearDeductions}
+                  disabled={deductionLoading}
+                  className="rounded border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveDeductions}
+                  disabled={deductionSaving || deductionLoading}
+                  className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                >
+                  {deductionSaving ? "Saving…" : "Save"}
+                </button>
+              </div>
             </div>
 
             {deductionError && (
@@ -1126,66 +1348,53 @@ export default function DashboardPage() {
               </div>
             )}
 
-            {deductionAdding && (
-              <div className="mb-4 flex flex-wrap items-end gap-2 rounded border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
-                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
-                  Date
-                  <input type="date" value={deductionForm.date} onChange={(e) => setDeductionForm((f) => ({ ...f, date: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
-                </label>
-                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
-                  Payee
-                  <input type="text" placeholder="Who was paid" value={deductionForm.name} onChange={(e) => setDeductionForm((f) => ({ ...f, name: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
-                </label>
-                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
-                  Description
-                  <input type="text" placeholder="What was purchased" value={deductionForm.description} onChange={(e) => setDeductionForm((f) => ({ ...f, description: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
-                </label>
-                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
-                  Amount
-                  <input type="number" step="0.01" placeholder="0.00" value={deductionForm.amount} onChange={(e) => setDeductionForm((f) => ({ ...f, amount: e.target.value }))} className="w-28 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
-                </label>
-                <label className="flex flex-col gap-1 text-xs text-zinc-600 dark:text-zinc-400">
-                  Proof
-                  <input type="text" placeholder="Receipt, txn ID, etc." value={deductionForm.proof} onChange={(e) => setDeductionForm((f) => ({ ...f, proof: e.target.value }))} className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300" />
-                </label>
-                <button type="button" onClick={handleAddDeduction} className="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500">
-                  Save
-                </button>
-              </div>
-            )}
-
             {deductionLoading ? (
               <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
-            ) : deductionRowsFiltered.length === 0 ? (
-              <p className="text-sm text-zinc-500 dark:text-zinc-400">No deductions for this year.</p>
             ) : (
               <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
                 <table className="w-full text-left text-sm">
                   <thead className="border-b border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900">
                     <tr>
-                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Date</th>
-                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Payee</th>
-                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Description</th>
-                      <th className="px-3 py-2 text-right font-medium text-zinc-600 dark:text-zinc-400">Amount</th>
-                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Proof</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Category</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">Monthly Amount</th>
+                      <th className="px-3 py-2 font-medium text-zinc-600 dark:text-zinc-400">%</th>
+                      <th className="px-3 py-2 text-right font-medium text-zinc-600 dark:text-zinc-400">Monthly Deduction</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                    {deductionRowsFiltered.map((row) => (
-                      <tr key={row.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
-                        <td className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300">
-                          {new Date(row.date).toLocaleDateString()}
-                        </td>
-                        <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">{row.name ?? "—"}</td>
-                        <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">{row.description ?? "—"}</td>
-                        <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-zinc-700 dark:text-zinc-300">
-                          ${Number(row.amount).toFixed(2)}
-                        </td>
-                        <td className="max-w-0 truncate px-3 py-2 font-mono text-xs text-zinc-500 dark:text-zinc-400" title={row.proof}>
-                          {row.proof || "—"}
-                        </td>
-                      </tr>
-                    ))}
+                    {deductionCategories.map((row, index) => {
+                      const monthlyDeduction = Math.round((row.monthlyAmount * row.percentage) / 100 * 100) / 100;
+                      return (
+                        <tr key={row.category} className="hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
+                          <td className="px-3 py-2 font-medium text-zinc-900 dark:text-zinc-100">{row.label}</td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={row.monthlyAmount || ""}
+                              onChange={(e) => setDeductionCategory(index, "monthlyAmount", parseFloat(e.target.value) || 0)}
+                              className="w-28 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              max="100"
+                              placeholder="10"
+                              value={row.percentage || ""}
+                              onChange={(e) => setDeductionCategory(index, "percentage", parseFloat(e.target.value) || 0)}
+                              className="w-20 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                            />
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2 text-right font-mono font-medium text-red-600 dark:text-red-400">
+                            {monthlyDeduction.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1221,7 +1430,7 @@ export default function DashboardPage() {
               </button>
             </div>
             <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">
-              Transactions the classification agent could not classify as income or deduction. Run the agent to populate, or add manually.
+              Transactions the classification agent could not classify as income or expense. Run the agent to populate, or add manually.
             </p>
             {uncategorizedError && (
               <div className="mb-4 flex items-start justify-between rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
@@ -1668,7 +1877,7 @@ export default function DashboardPage() {
               Rules
             </h2>
             <p className="mb-4 text-zinc-600 dark:text-zinc-400">
-              Rules help the agent classify transactions as income or deduction. Add rules when the automatic classification is wrong—for example, a refund showing as income, a transfer as a deduction, or a specific merchant you always want treated one way. Clearer rules give you more accurate Summary, Income, and Deductions views.
+              Rules help the agent classify transactions as income or expense. Add rules when the automatic classification is wrong—for example, a refund showing as income, a transfer as an expense, or a specific merchant you always want treated one way. Clearer rules give you more accurate Summary, Income, and Expenses views.
             </p>
             {rulesError && (
               <div className="mb-4 flex items-start justify-between rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">

@@ -39,12 +39,12 @@ const readIncome: ToolDefinition = {
   },
 };
 
-const readDeductions: ToolDefinition = {
+const readExpenses: ToolDefinition = {
   type: "function",
   function: {
-    name: "read_deductions",
+    name: "read_expenses",
     description:
-      "Read recent deduction rows from the database. Use to check how similar transactions were classified before.",
+      "Read recent expense rows from the database. Use to check how similar transactions were classified before.",
     parameters: {
       type: "object",
       properties: {
@@ -117,12 +117,12 @@ const insertIncome: ToolDefinition = {
   },
 };
 
-const insertDeduction: ToolDefinition = {
+const insertExpense: ToolDefinition = {
   type: "function",
   function: {
-    name: "insert_deduction",
+    name: "insert_expense",
     description:
-      "Classify a transaction as a DEDUCTION (business expense) by inserting a row into the deductions table.",
+      "Classify a transaction as an EXPENSE (business expense) by inserting a row into the expenses table.",
     parameters: {
       type: "object",
       properties: {
@@ -146,7 +146,7 @@ const insertDeduction: ToolDefinition = {
         },
         proof: {
           type: "string",
-          description: "The transaction_id that this deduction came from.",
+          description: "The transaction_id that this expense came from.",
         },
       },
       required: ["date", "name", "description", "amount", "proof"],
@@ -159,7 +159,7 @@ const insertUncategorized: ToolDefinition = {
   function: {
     name: "insert_uncategorized",
     description:
-      "Mark a transaction as UNCATEGORIZED when you cannot confidently classify it as income or deduction.",
+      "Mark a transaction as UNCATEGORIZED when you cannot confidently classify it as income or expense.",
     parameters: {
       type: "object",
       properties: {
@@ -193,9 +193,9 @@ const insertUncategorized: ToolDefinition = {
 /** All tool definitions to register with OpenRouter. */
 export const ALL_TOOLS: ToolDefinition[] = [
   readIncome,
-  readDeductions,
+  readExpenses,
   readUncategorized,
   insertIncome,
-  insertDeduction,
+  insertExpense,
   insertUncategorized,
 ];

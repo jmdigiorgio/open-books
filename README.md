@@ -1,15 +1,15 @@
 # OpenBooks
 
-Open-source bookkeeping for solo businesses and freelancers. Connect your bank via Plaid, sync transactions to Postgres, and manage income, deductions, mileage, and classification rules in a single dashboard.
+Open-source bookkeeping for solo businesses and freelancers. Connect your bank via Plaid, sync transactions to Postgres, and manage income, expenses, mileage, and classification rules in a single dashboard.
 
-Built for freelancers and sole proprietors who want to track income, deductions, and mileage without paying for QuickBooks.
+Built for freelancers and sole proprietors who want to track income, expenses, and mileage without paying for QuickBooks.
 
 ## Features
 
 - **Bank sync via Plaid** — Link your business bank account (e.g. Novo) through Plaid Link. First sync pulls available history (up to 24 months); subsequent syncs are incremental. Sync can be triggered manually or by a cron job.
-- **Postgres storage** — Transactions, income, deductions, rules, and prompt are stored in Postgres. The dashboard reads from the DB for fast loads and no repeated Plaid API cost.
-- **Tabbed dashboard** — Summary, Income, Deductions, Mileage, Transactions, Rules, and Prompt. Transactions tab: sortable table, year filter, Sync button. Rules: per-rule CRUD for classification overrides. Prompt: system prompt for the classification agent.
-- **Income & deductions tables** — Schema aligned with IRS-style records (date, payer/payee, description, amount, proof). Ready for an agent or manual entry to classify transactions from the `transactions` table.
+- **Postgres storage** — Transactions, income, expenses, rules, and prompt are stored in Postgres. The dashboard reads from the DB for fast loads and no repeated Plaid API cost.
+- **Tabbed dashboard** — Summary, Income, Expenses, Mileage, Transactions, Rules, and Prompt. Transactions tab: sortable table, year filter, Sync button. Rules: per-rule CRUD for classification overrides. Prompt: system prompt for the classification agent.
+- **Income & expenses tables** — Schema aligned with IRS-style records (date, payer/payee, description, amount, proof). Ready for an agent or manual entry to classify transactions from the `transactions` table.
 - **Single-password auth** — No user accounts. One shared password protects the dashboard (cookie-based session).
 
 ## Architecture
@@ -42,18 +42,18 @@ Plaid API ──► Next.js API routes ──► Postgres
 docker compose up -d
 ```
 
-Postgres 16 runs on `localhost:5432`. On first start, `db/01-init.sql` creates the schema (transactions, sync_state, plaid_link_state, agent_rules, agent_prompt, income, deductions).
+Postgres 16 runs on `localhost:5432`. On first start, `db/01-init.sql` creates the schema (transactions, sync_state, plaid_link_state, agent_rules, agent_prompt, income, expenses).
 
 **Option B — Existing Postgres (e.g. Railway)**
 
-Use your `DATABASE_URL`. For existing DBs that don’t run `01-init.sql`, use the one-time script to ensure `income` and `deductions` exist:
+Use your `DATABASE_URL`. For existing DBs that don’t run `01-init.sql`, use the one-time script to ensure `income` and `expenses` exist:
 
 ```bash
 cd services/dashboard
-node scripts/ensure-income-deductions.js
+node scripts/ensure-income-expenses.js
 ```
 
-Script reads `DATABASE_URL` from `.env.local`; creates `income` and `deductions` if missing; migrates from legacy `expenses` table if present.
+Script reads `DATABASE_URL` from `.env.local`; creates `income` and `expenses` if missing; migrates from legacy `deductions` table if present.
 
 ### 2. Configure environment
 
@@ -88,7 +88,7 @@ open-books/
 ├── docker-compose.yml          # Postgres (optional)
 ├── db/
 │   └── 01-init.sql            # Full schema (transactions, sync_state, plaid_link_state,
-│                              # agent_rules, agent_prompt, income, deductions)
+│                              # agent_rules, agent_prompt, income, expenses)
 ├── docs/
 │   └── SYSTEM_DESIGN.md       # Architecture and data model
 └── services/
@@ -101,14 +101,14 @@ open-books/
         │       ├── plaid/          # link-token, exchange, status, sync, disconnect
         │       ├── transactions/   # Read transactions (year filter)
         │       ├── income/         # List income rows
-        │       ├── deductions/     # List deduction rows
+        │       ├── expenses/       # List expense rows
         │       ├── rules/          # CRUD for agent_rules
         │       ├── rules/[id]      # PATCH/DELETE single rule
         │       ├── prompt/         # GET/PUT agent_prompt
         │       └── mileage/        # GET mileage table; upload CSV
-        ├── lib/                # db, plaid, sync, auth, rules, prompt, income, deductions, mileage
+        ├── lib/                # db, plaid, sync, auth, rules, prompt, income, expenses, mileage
         └── scripts/
-            └── ensure-income-deductions.js   # One-time: create income + deductions tables
+            └── ensure-income-expenses.js   # One-time: create income + expenses tables
 ```
 
 ## Database Schema (summary)
@@ -121,13 +121,13 @@ open-books/
 | `agent_rules` | One row per classification rule (CRUD); agent reads these. |
 | `agent_prompt` | Single row: system prompt for the classification agent. |
 | `income` | Classified income rows (date, name, description, amount, proof → transaction_id). |
-| `deductions` | Classified deduction rows (same shape). |
+| `expenses` | Classified expense rows (same shape). |
 
 See [`db/01-init.sql`](db/01-init.sql) for the full schema.
 
 ## Classification agent
 
-The classification agent runs as a separate service (see `services/agent`). It is triggered **manually only** from the dashboard via the **Classify** button (✦ Classify) in the tab bar. No cron or scheduled runs. The agent reads the system prompt from `services/agent/prompt.md`, rules from `agent_rules` in the DB, and classifies unclassified transactions into `income`, `deductions`, or `uncategorized`.
+The classification agent runs as a separate service (see `services/agent`). It is triggered **manually only** from the dashboard via the **Classify** button (✦ Classify) in the tab bar. No cron or scheduled runs. The agent reads the system prompt from `services/agent/prompt.md`, rules from `agent_rules` in the DB, and classifies unclassified transactions into `income`, `expenses`, or `uncategorized`.
 
 Transaction sync from Plaid is separate (manual Sync or your own trigger) so the agent doesn’t spend tokens on syncing.
 
@@ -135,7 +135,7 @@ Transaction sync from Plaid is separate (manual Sync or your own trigger) so the
 
 | Script | Purpose |
 |--------|--------|
-| `node scripts/ensure-income-deductions.js` | One-time: create `income` and `deductions` tables; migrate from `expenses` if present. Run from `services/dashboard` with `DATABASE_URL` in env or `.env.local`. |
+| `node scripts/ensure-income-expenses.js` | One-time: create `income` and `expenses` tables; migrate from `deductions` if present. Run from `services/dashboard` with `DATABASE_URL` in env or `.env.local`. |
 
 ## License
 

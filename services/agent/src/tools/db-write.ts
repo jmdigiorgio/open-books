@@ -5,7 +5,7 @@
  * that goes back to the model as the tool result.
  *
  * UNIQUE constraints in the schema prevent double-inserts
- * (income.proof, deductions.proof, uncategorized.transaction_id).
+ * (income.proof, expenses.proof, uncategorized.transaction_id).
  */
 
 import { getPool } from "../db.js";
@@ -38,10 +38,10 @@ export async function insertIncome(args: InsertIncomeArgs): Promise<string> {
 }
 
 /* ------------------------------------------------------------------ */
-/*  insert_deduction                                                   */
+/*  insert_expense                                                     */
 /* ------------------------------------------------------------------ */
 
-export interface InsertDeductionArgs {
+export interface InsertExpenseArgs {
   date: string;
   name: string;
   description: string;
@@ -50,17 +50,17 @@ export interface InsertDeductionArgs {
 }
 
 /**
- * Insert one deduction row. Returns confirmation JSON.
+ * Insert one expense row. Returns confirmation JSON.
  */
-export async function insertDeduction(args: InsertDeductionArgs): Promise<string> {
+export async function insertExpense(args: InsertExpenseArgs): Promise<string> {
   const pool = getPool();
   const { rows } = await pool.query(
-    `INSERT INTO deductions (date, name, description, amount, proof)
+    `INSERT INTO expenses (date, name, description, amount, proof)
      VALUES ($1, $2, $3, $4, $5)
      RETURNING id`,
     [args.date, args.name, args.description, args.amount, args.proof]
   );
-  return JSON.stringify({ ok: true, id: rows[0].id, table: "deductions" });
+  return JSON.stringify({ ok: true, id: rows[0].id, table: "expenses" });
 }
 
 /* ------------------------------------------------------------------ */

@@ -47,7 +47,7 @@ CREATE TABLE plaid_link_state (
 
 COMMENT ON TABLE plaid_link_state IS 'Plaid access token and linked institution; single row for one bank account.';
 
--- One row per classification rule; agent reads these when classifying transactions as income vs deductions.
+-- One row per classification rule; agent reads these when classifying transactions as income vs expenses.
 CREATE TABLE agent_rules (
   id serial PRIMARY KEY,
   content text NOT NULL DEFAULT '',
@@ -71,8 +71,8 @@ CREATE TABLE income (
 
 COMMENT ON TABLE income IS 'Income records; proof links to transactions.transaction_id.';
 
--- Deductions: matches example table (Date incurred, Payee, Description, Amount paid, Proof of payment).
-CREATE TABLE deductions (
+-- Expenses: matches example table (Date incurred, Payee, Description, Amount paid, Proof of payment).
+CREATE TABLE expenses (
   id serial PRIMARY KEY,
   date date NOT NULL,
   name text,
@@ -82,7 +82,7 @@ CREATE TABLE deductions (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-COMMENT ON TABLE deductions IS 'Deduction records; proof links to transactions.transaction_id.';
+COMMENT ON TABLE expenses IS 'Expense records; proof links to transactions.transaction_id.';
 
 -- Transactions the classification agent could not categorize (after attempting research).
 -- One row per transaction; reason explains why it was left uncategorized.
@@ -96,4 +96,16 @@ CREATE TABLE uncategorized (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-COMMENT ON TABLE uncategorized IS 'Transactions the agent could not classify as income or deduction; reason explains why.';
+COMMENT ON TABLE uncategorized IS 'Transactions the agent could not classify as income or expense; reason explains why.';
+
+-- Deduction categories: home-office style (Rent, Utilities, Internet, Phone, etc.) per year.
+-- monthly_amount = amount paid per month; percentage = business use (0–1); monthly deduction = monthly_amount * percentage (computed in UI). Year total calculated in Summary.
+CREATE TABLE deduction_categories (
+  year smallint NOT NULL,
+  category text NOT NULL,
+  monthly_amount numeric NOT NULL DEFAULT 0,
+  percentage numeric NOT NULL DEFAULT 0,
+  PRIMARY KEY (year, category)
+);
+
+COMMENT ON TABLE deduction_categories IS 'Per-year category monthly amounts and business-use percentage; monthly deduction and year total computed in UI/Summary.';

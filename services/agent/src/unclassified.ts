@@ -3,7 +3,7 @@
  *
  * "Unclassified" = transaction_id does NOT appear in:
  *   - income.proof
- *   - deductions.proof
+ *   - expenses.proof
  *   - uncategorized.transaction_id
  *
  * Returns a lightweight projection: { transaction_id, date, description, amount }.
@@ -34,7 +34,7 @@ export async function fetchUnclassified(): Promise<UnclassifiedTransaction[]> {
     FROM transactions t
     WHERE t.pending = false
       AND t.transaction_id NOT IN (SELECT proof FROM income)
-      AND t.transaction_id NOT IN (SELECT proof FROM deductions)
+      AND t.transaction_id NOT IN (SELECT proof FROM expenses)
       AND t.transaction_id NOT IN (SELECT transaction_id FROM uncategorized)
     ORDER BY t.date
   `);

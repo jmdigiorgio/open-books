@@ -11,7 +11,7 @@ export interface UnclassifiedTransaction {
 }
 
 /** The classification decision the agent made for a single transaction. */
-export type Decision = "income" | "deduction" | "uncategorized";
+export type Decision = "income" | "expense" | "uncategorized";
 
 /** Counters returned after a full agent run. */
 export interface RunResult {
@@ -19,8 +19,8 @@ export interface RunResult {
   processed: number;
   /** How many were classified as income. */
   income: number;
-  /** How many were classified as deductions. */
-  deductions: number;
+  /** How many were classified as expenses. */
+  expenses: number;
   /** How many remained uncategorized after both passes. */
   uncategorized: number;
   /** How many transactions hit an error during classification. */

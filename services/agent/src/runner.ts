@@ -6,7 +6,7 @@
  *
  * Pass 2: Re-attempt classification of pass-1 uncategorized transactions using
  *         the `:online` model variant (web search enabled). The existing uncategorized
- *         row is deleted first so the agent can re-insert into income, deductions,
+ *         row is deleted first so the agent can re-insert into income, expenses,
  *         or uncategorized with an updated reason.
  *
  * After both passes, a summary row is inserted into agent_runs.
@@ -64,7 +64,7 @@ function getBaseModel(): string {
 /*  agent_runs table                                                   */
 /* ------------------------------------------------------------------ */
 
-/** Create the agent_runs table if it doesn't already exist. */
+/** Create the agent_runs table if it doesn't already exist. Migrates deductions_count -> expenses_count if present. */
 async function ensureAgentRunsTable(): Promise<void> {
   const pool = getPool();
   await pool.query(`
@@ -74,12 +74,18 @@ async function ensureAgentRunsTable(): Promise<void> {
       finished_at timestamptz,
       total_processed integer NOT NULL DEFAULT 0,
       income_count integer NOT NULL DEFAULT 0,
-      deductions_count integer NOT NULL DEFAULT 0,
+      expenses_count integer NOT NULL DEFAULT 0,
       uncategorized_count integer NOT NULL DEFAULT 0,
       error_count integer NOT NULL DEFAULT 0,
       errors jsonb NOT NULL DEFAULT '[]'
     )
   `);
+  const hasDeductionsCol = await pool.query(
+    "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'agent_runs' AND column_name = 'deductions_count'"
+  );
+  if (hasDeductionsCol.rows.length > 0) {
+    await pool.query("ALTER TABLE agent_runs RENAME COLUMN deductions_count TO expenses_count");
+  }
 }
 
 /** Insert a completed run row into agent_runs. Returns the new row id. */
@@ -90,14 +96,14 @@ async function logRun(
   const pool = getPool();
   const { rows } = await pool.query(
     `INSERT INTO agent_runs
-       (started_at, finished_at, total_processed, income_count, deductions_count, uncategorized_count, error_count, errors)
+       (started_at, finished_at, total_processed, income_count, expenses_count, uncategorized_count, error_count, errors)
      VALUES ($1, NOW(), $2, $3, $4, $5, $6, $7)
      RETURNING id`,
     [
       startedAt,
       counts.processed,
       counts.income,
-      counts.deductions,
+      counts.expenses,
       counts.uncategorized,
       counts.errors,
       JSON.stringify(counts.errorDetails),
@@ -122,7 +128,7 @@ function buildUserMessage(tx: UnclassifiedTransaction, isRetry: boolean): string
     `  date           = ${tx.date}\n` +
     `  description    = ${tx.description}\n` +
     `  amount         = ${tx.amount}\n\n` +
-    `Call exactly ONE of: insert_income, insert_deduction, or insert_uncategorized.`;
+    `Call exactly ONE of: insert_income, insert_expense, or insert_uncategorized.`;
 
   if (isRetry) {
     msg +=
@@ -164,14 +170,14 @@ async function deleteUncategorized(transactionId: string): Promise<void> {
  */
 async function resolveDecision(
   transactionId: string
-): Promise<"income" | "deduction" | "uncategorized" | null> {
+): Promise<"income" | "expense" | "uncategorized" | null> {
   const pool = getPool();
 
   const inc = await pool.query("SELECT 1 FROM income WHERE proof = $1 LIMIT 1", [transactionId]);
   if (inc.rows.length > 0) return "income";
 
-  const ded = await pool.query("SELECT 1 FROM deductions WHERE proof = $1 LIMIT 1", [transactionId]);
-  if (ded.rows.length > 0) return "deduction";
+  const exp = await pool.query("SELECT 1 FROM expenses WHERE proof = $1 LIMIT 1", [transactionId]);
+  if (exp.rows.length > 0) return "expense";
 
   const unc = await pool.query("SELECT 1 FROM uncategorized WHERE transaction_id = $1 LIMIT 1", [transactionId]);
   if (unc.rows.length > 0) return "uncategorized";
@@ -205,17 +211,17 @@ export async function runClassification(): Promise<RunResult> {
     const runId = await logRun(startedAt, {
       processed: 0,
       income: 0,
-      deductions: 0,
+      expenses: 0,
       uncategorized: 0,
       errors: 0,
       errorDetails: [],
     });
-    return { processed: 0, income: 0, deductions: 0, uncategorized: 0, errors: 0, errorDetails: [], runId };
+    return { processed: 0, income: 0, expenses: 0, uncategorized: 0, errors: 0, errorDetails: [], runId };
   }
 
   /* Accumulators. */
   let incomeCount = 0;
-  let deductionCount = 0;
+  let expenseCount = 0;
   let uncategorizedCount = 0;
   let errorCount = 0;
   const errorDetails: Array<{ transaction_id: string; error: string }> = [];
@@ -245,9 +251,9 @@ export async function runClassification(): Promise<RunResult> {
       if (decision === "income") {
         incomeCount++;
         console.log(JSON.stringify({ pass: 1, transaction_id: tx.transaction_id, decision: "income", description: tx.description }));
-      } else if (decision === "deduction") {
-        deductionCount++;
-        console.log(JSON.stringify({ pass: 1, transaction_id: tx.transaction_id, decision: "deduction", description: tx.description }));
+      } else if (decision === "expense") {
+        expenseCount++;
+        console.log(JSON.stringify({ pass: 1, transaction_id: tx.transaction_id, decision: "expense", description: tx.description }));
       } else if (decision === "uncategorized") {
         /* Queue for pass 2 retry with web search. */
         pass2Queue.push(tx);
@@ -291,9 +297,9 @@ export async function runClassification(): Promise<RunResult> {
         if (decision === "income") {
           incomeCount++;
           console.log(JSON.stringify({ pass: 2, transaction_id: tx.transaction_id, decision: "income", description: tx.description }));
-        } else if (decision === "deduction") {
-          deductionCount++;
-          console.log(JSON.stringify({ pass: 2, transaction_id: tx.transaction_id, decision: "deduction", description: tx.description }));
+        } else if (decision === "expense") {
+          expenseCount++;
+          console.log(JSON.stringify({ pass: 2, transaction_id: tx.transaction_id, decision: "expense", description: tx.description }));
         } else if (decision === "uncategorized") {
           uncategorizedCount++;
           console.log(JSON.stringify({ pass: 2, transaction_id: tx.transaction_id, decision: "uncategorized", description: tx.description }));
@@ -314,22 +320,22 @@ export async function runClassification(): Promise<RunResult> {
   }
 
   /* ---- Log run to agent_runs ---- */
-  const processed = incomeCount + deductionCount + uncategorizedCount + errorCount;
+  const processed = incomeCount + expenseCount + uncategorizedCount + errorCount;
   const runId = await logRun(startedAt, {
     processed,
     income: incomeCount,
-    deductions: deductionCount,
+    expenses: expenseCount,
     uncategorized: uncategorizedCount,
     errors: errorCount,
     errorDetails,
   });
 
-  console.log(`[runner] Run #${runId} complete: ${processed} processed, ${incomeCount} income, ${deductionCount} deductions, ${uncategorizedCount} uncategorized, ${errorCount} errors`);
+  console.log(`[runner] Run #${runId} complete: ${processed} processed, ${incomeCount} income, ${expenseCount} expenses, ${uncategorizedCount} uncategorized, ${errorCount} errors`);
 
   return {
     processed,
     income: incomeCount,
-    deductions: deductionCount,
+    expenses: expenseCount,
     uncategorized: uncategorizedCount,
     errors: errorCount,
     errorDetails,

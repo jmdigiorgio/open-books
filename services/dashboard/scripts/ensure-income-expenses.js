@@ -1,7 +1,7 @@
 /**
- * One-time script: create income, deductions, and uncategorized tables if missing.
- * Migrates from expenses -> deductions if expenses exists.
- * Run from dashboard dir: node scripts/ensure-income-deductions.js
+ * One-time script: create income, expenses, and uncategorized tables if missing.
+ * Migrates from deductions -> expenses if deductions exists.
+ * Run from dashboard dir: node scripts/ensure-income-expenses.js
  * Loads .env.local for DATABASE_URL if present.
  */
 
@@ -52,12 +52,12 @@ async function run() {
       console.log("Ensured income has description.");
     }
 
-    const hasDeductions = await client.query(
-      "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'deductions'"
+    const hasExpenses = await client.query(
+      "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'expenses'"
     );
-    if (hasDeductions.rows.length === 0) {
+    if (hasExpenses.rows.length === 0) {
       await client.query(`
-        CREATE TABLE deductions (
+        CREATE TABLE expenses (
           id serial PRIMARY KEY,
           date date NOT NULL,
           name text,
@@ -67,10 +67,10 @@ async function run() {
           created_at timestamptz NOT NULL DEFAULT now()
         )
       `);
-      console.log("Created table deductions.");
+      console.log("Created table expenses.");
     } else {
-      await client.query("ALTER TABLE deductions ADD COLUMN IF NOT EXISTS description text");
-      console.log("Ensured deductions has description.");
+      await client.query("ALTER TABLE expenses ADD COLUMN IF NOT EXISTS description text");
+      console.log("Ensured expenses has description.");
     }
 
     const hasUncategorized = await client.query(
@@ -91,20 +91,20 @@ async function run() {
       console.log("Created table uncategorized.");
     }
 
-    const hasExpenses = await client.query(
-      "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'expenses'"
+    const hasDeductions = await client.query(
+      "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'deductions'"
     );
-    if (hasExpenses.rows.length > 0) {
-      const count = await client.query("SELECT COUNT(*)::int AS n FROM deductions");
+    if (hasDeductions.rows.length > 0) {
+      const count = await client.query("SELECT COUNT(*)::int AS n FROM expenses");
       if (count.rows[0].n === 0) {
         await client.query(`
-          INSERT INTO deductions (date, name, description, amount, proof, created_at)
-          SELECT date, name, ''::text, amount, proof, created_at FROM expenses ORDER BY id
+          INSERT INTO expenses (date, name, description, amount, proof, created_at)
+          SELECT date, name, COALESCE(description, ''::text), amount, proof, created_at FROM deductions ORDER BY id
         `);
-        console.log("Migrated rows from expenses to deductions.");
+        console.log("Migrated rows from deductions to expenses.");
       }
-      await client.query("DROP TABLE expenses");
-      console.log("Dropped table expenses.");
+      await client.query("DROP TABLE deductions");
+      console.log("Dropped table deductions.");
     }
 
     console.log("Done.");

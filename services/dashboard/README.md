@@ -1,6 +1,6 @@
 # Dashboard
 
-Next.js application for the OpenBooks dashboard. Handles bank linking (Plaid), transaction sync, income/deductions tables, classification rules and prompt, mileage CSV upload, and the tabbed UI.
+Next.js application for the OpenBooks dashboard. Handles bank linking (Plaid), transaction sync, income/expenses tables, classification rules and prompt, mileage CSV upload, and the tabbed UI.
 
 ## Setup
 
@@ -29,7 +29,7 @@ Single shared password. Set `DASHBOARD_PASSWORD` in `.env.local`. If unset, `dev
 | POST | `/api/plaid/disconnect` | Clear stored access token. |
 | GET | `/api/transactions?year=YYYY` | Read transactions from Postgres (default: current year; `year=all` for no filter). |
 | GET | `/api/income` | List income rows (ensures table exists). |
-| GET | `/api/deductions` | List deduction rows (ensures table exists; migrates from `expenses` if present). |
+| GET | `/api/expenses` | List expense rows (ensures table exists; migrates from `deductions` if present). |
 | GET | `/api/rules` | List all agent rules. |
 | POST | `/api/rules` | Create a rule (body: `{ content, sortOrder? }`). |
 | PATCH | `/api/rules/[id]` | Update a rule (body: `{ content }`). |
@@ -45,7 +45,7 @@ Single shared password. Set `DASHBOARD_PASSWORD` in `.env.local`. If unset, `dev
 
 | Script | Purpose |
 |--------|--------|
-| `node scripts/ensure-income-deductions.js` | One-time: create `income` and `deductions` tables; migrate from `expenses` if present. Requires `DATABASE_URL` (e.g. in `.env.local`). |
+| `node scripts/ensure-income-expenses.js` | One-time: create `income` and `expenses` tables; migrate from `deductions` if present. Requires `DATABASE_URL` (e.g. in `.env.local`). |
 
 ## Environment Variables
 

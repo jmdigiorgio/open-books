@@ -13,13 +13,13 @@ import type {
   ToolCall,
 } from "./types.js";
 import { ALL_TOOLS } from "./tools/definitions.js";
-import { readIncome, readDeductions, readUncategorized } from "./tools/db-read.js";
+import { readIncome, readExpenses, readUncategorized } from "./tools/db-read.js";
 import {
   insertIncome,
-  insertDeduction,
+  insertExpense,
   insertUncategorized,
   type InsertIncomeArgs,
-  type InsertDeductionArgs,
+  type InsertExpenseArgs,
   type InsertUncategorizedArgs,
 } from "./tools/db-write.js";
 
@@ -56,14 +56,14 @@ async function dispatchTool(call: ToolCall): Promise<string> {
   switch (name) {
     case "read_income":
       return readIncome(args as { limit?: number });
-    case "read_deductions":
-      return readDeductions(args as { limit?: number });
+    case "read_expenses":
+      return readExpenses(args as { limit?: number });
     case "read_uncategorized":
       return readUncategorized(args as { limit?: number });
     case "insert_income":
       return insertIncome(args as unknown as InsertIncomeArgs);
-    case "insert_deduction":
-      return insertDeduction(args as unknown as InsertDeductionArgs);
+    case "insert_expense":
+      return insertExpense(args as unknown as InsertExpenseArgs);
     case "insert_uncategorized":
       return insertUncategorized(args as unknown as InsertUncategorizedArgs);
     default:

@@ -55,9 +55,9 @@ API --> UI : { added, modified, removed, syncedAt }
 UI --> User : Sync complete
 
 == Read data (dashboard tabs) ==
-User -> UI : Open tab (Transactions / Income / Deductions / etc.)
-UI -> API : GET /api/transactions | /api/income | /api/deductions | ...
-API -> DB : SELECT from transactions | income | deductions | rules | mileage
+User -> UI : Open tab (Transactions / Income / Expenses / etc.)
+UI -> API : GET /api/transactions | /api/income | /api/expenses | ...
+API -> DB : SELECT from transactions | income | expenses | rules | mileage
 DB --> API : rows
 API --> UI : JSON
 UI --> User : Render table
@@ -67,14 +67,14 @@ User -> UI : Click "Classify" (or "Clear" then "Classify")
 opt Clear first
   User -> UI : Click "Clear"
   UI -> API : POST /api/agent/clear
-  API -> DB : Truncate income, deductions, uncategorized
+  API -> DB : Truncate income, expenses, uncategorized
   API --> UI : 200
 end
 UI -> API : POST /api/agent/run
 API -> Agent : POST {AGENT_URL}/run (with API key)
 Agent -> DB : Read transactions, agent_rules, agent_prompt
-Agent -> Agent : Classify into income / deduction / uncategorized
-Agent -> DB : INSERT into income, deductions, uncategorized
+Agent -> Agent : Classify into income / expense / uncategorized
+Agent -> DB : INSERT into income, expenses, uncategorized
 Agent --> API : 200
 API --> UI : 200
 note over UI : UI polls GET /api/agent/progress for current/total
@@ -94,9 +94,9 @@ API -> DB : INSERT/upsert from parsed CSV
 API --> UI : result
 UI --> User : Upload complete
 
-== Optional: Income / Deductions / Rules CRUD ==
-User -> UI : Add or edit income, deduction, or rule
-UI -> API : POST/PATCH/DELETE /api/income | /api/deductions | /api/rules/[id]
+== Optional: Income / Expenses / Rules CRUD ==
+User -> UI : Add or edit income, expense, or rule
+UI -> API : POST/PATCH/DELETE /api/income | /api/expenses | /api/rules/[id]
 API -> DB : INSERT | UPDATE | DELETE
 DB --> API : ok
 API --> UI : 200

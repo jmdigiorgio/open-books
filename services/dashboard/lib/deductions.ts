@@ -1,49 +1,87 @@
 /**
- * Deductions table: matches example (Date incurred, Payee, Description, Amount paid, Proof).
- * proof = transactions.transaction_id. Ensures table exists and migrates from expenses if present.
+ * Deduction categories: per-year monthly amounts and business-use percentage (e.g. rent, utilities, internet, phone).
+ * Monthly deduction = monthly_amount * percentage (computed in UI); year total calculated in Summary.
  */
 
 import { getPool } from "@/lib/db";
 
-const TABLE = "deductions";
+/** Category keys stored in the DB. */
+export const DEDUCTION_CATEGORY_KEYS = [
+  "rent",
+  "water_sewer_trash",
+  "gas",
+  "electricity",
+  "internet",
+  "phone",
+] as const;
 
-/**
- * Create deductions table if it does not exist (structure matches UI example).
- * If the old expenses table exists, copy rows into deductions then drop expenses.
- * Adds description column if missing on existing table.
- */
-export async function ensureDeductionsTable(): Promise<void> {
+export type DeductionCategoryKey = (typeof DEDUCTION_CATEGORY_KEYS)[number];
+
+/** Display label for each category. */
+export const DEDUCTION_CATEGORY_LABELS: Record<DeductionCategoryKey, string> = {
+  rent: "Rent",
+  water_sewer_trash: "Water/Sewer/Trash",
+  gas: "Gas",
+  electricity: "Electricity",
+  internet: "Internet",
+  phone: "Phone",
+};
+
+export interface DeductionCategoryRow {
+  category: DeductionCategoryKey;
+  monthly_amount: number;
+  percentage: number;
+}
+
+const TABLE = "deduction_categories";
+
+/** Create deduction_categories table if it does not exist. */
+export async function ensureDeductionCategoriesTable(): Promise<void> {
   const pool = getPool();
-  const tableExists = await pool.query(
-    `SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1`,
-    [TABLE]
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${TABLE} (
+      year smallint NOT NULL,
+      category text NOT NULL,
+      monthly_amount numeric NOT NULL DEFAULT 0,
+      percentage numeric NOT NULL DEFAULT 0,
+      PRIMARY KEY (year, category)
+    )
+  `);
+  const hasTotalCol = await pool.query(
+    "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'deduction_categories' AND column_name = 'total'"
   );
-  if (tableExists.rows.length === 0) {
-    await pool.query(`
-      CREATE TABLE ${TABLE} (
-        id serial PRIMARY KEY,
-        date date NOT NULL,
-        name text,
-        description text,
-        amount numeric NOT NULL,
-        proof text NOT NULL UNIQUE REFERENCES transactions(transaction_id) ON DELETE CASCADE,
-        created_at timestamptz NOT NULL DEFAULT now()
-      )
-    `);
-  } else {
-    await pool.query(`ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS description text`);
+  if (hasTotalCol.rows.length > 0) {
+    await pool.query("ALTER TABLE deduction_categories RENAME COLUMN total TO monthly_amount");
   }
-  const hasExpenses = await pool.query(
-    `SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'expenses'`
+}
+
+/** Load all category rows for a year. Returns one row per category (defaults to 0, 0 if missing). */
+export async function getDeductionCategories(year: number): Promise<DeductionCategoryRow[]> {
+  const pool = getPool();
+  const { rows } = await pool.query<{ category: string; monthly_amount: string; percentage: string }>(
+    "SELECT category, monthly_amount, percentage FROM deduction_categories WHERE year = $1",
+    [year]
   );
-  if (hasExpenses.rows.length > 0) {
-    const count = await pool.query(`SELECT COUNT(*)::int AS n FROM ${TABLE}`);
-    if (count.rows[0]?.n === 0) {
-      await pool.query(`
-        INSERT INTO ${TABLE} (date, name, description, amount, proof, created_at)
-        SELECT date, name, ''::text, amount, proof, created_at FROM expenses ORDER BY id
-      `);
-    }
-    await pool.query("DROP TABLE expenses");
+  const byCategory = new Map(rows.map((r) => [r.category, { monthly_amount: Number(r.monthly_amount), percentage: Number(r.percentage) }]));
+  return DEDUCTION_CATEGORY_KEYS.map((category) => ({
+    category,
+    monthly_amount: byCategory.get(category)?.monthly_amount ?? 0,
+    percentage: byCategory.get(category)?.percentage ?? 0,
+  }));
+}
+
+/** Save category monthly amounts and percentages for a year (upsert per category). */
+export async function saveDeductionCategories(
+  year: number,
+  categories: DeductionCategoryRow[]
+): Promise<void> {
+  const pool = getPool();
+  for (const row of categories) {
+    await pool.query(
+      `INSERT INTO deduction_categories (year, category, monthly_amount, percentage)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (year, category) DO UPDATE SET monthly_amount = $3, percentage = $4`,
+      [year, row.category, row.monthly_amount, row.percentage]
+    );
   }
 }
